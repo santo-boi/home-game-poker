@@ -49,6 +49,10 @@ class Table {
     this.timers = new Set();
     this.turnTimer = null;
     this.lastActivity = Date.now();
+    this.createdAt = Date.now();
+    this.gameKey = `${code}-${this.createdAt}`;
+    this.onHand = null;     // (table, records) — set by the server to save hand history
+    this.onLeave = null;    // (table, member) — final totals of someone leaving
   }
 
   // ---------- helpers ----------
@@ -76,14 +80,15 @@ class Table {
   // ---------- people ----------
   // Everyone in the room is a member. Members sit at the table with chips bought in from
   // their wallet, which only the admin can fill.
-  addMember({ name, isBot = false, bot = null, approved = true }){
+  addMember({ name, isBot = false, bot = null, approved = true, userId = null }){
     if(this.players.size >= 40) throw new Error('This game is full.');
     const id = crypto.randomUUID();
     const p = {
       id, token: crypto.randomBytes(16).toString('hex'), name, isBot, bot,
       wallet: 0, chips: 0, buyInTotal: 0, pendingChips: 0, seat: -1, connected: true, sittingOut: false,
       leaving: false, standing: false, inHand: false, folded: false, allIn: false, hole: [], bet: 0, committed: 0,
-      lastAction: null, shown: false, bank: this.settings.timeBank, handsPlayed: 0, joinedAt: Date.now(), approved
+      lastAction: null, shown: false, bank: this.settings.timeBank, handsPlayed: 0, joinedAt: Date.now(), approved,
+      userId, handsWon: 0, biggestPot: 0, startStack: 0
     };
     this.players.set(id, p);
     if(!this.adminId && !isBot && approved) this.adminId = id;
@@ -153,6 +158,7 @@ class Table {
       this.standUp(id);
       if(p.seat >= 0) return;   // still in a hand: finished when it ends
     }
+    if(this.onLeave) try { this.onLeave(this, p); } catch(e){ console.error(e); }
     this.players.delete(id);
     if(!p.isBot) this.addLog(`${p.name} ${reason} (net ${fmtNet(p.wallet - p.buyInTotal)}).`, 'leave');
     if(this.adminId === id){
@@ -271,7 +277,7 @@ class Table {
     const bbSeat = this.nextSeat(sbSeat, isIn);
     const order = [];
     for(let x = this.nextSeat(this.dealerSeat, isIn), n = 0; n < players.length; x = this.nextSeat(x, isIn), n++) order.push(x);
-    for(const p of this.seated()) Object.assign(p, { inHand: isIn(p), folded: false, allIn: false, hole: [], bet: 0, committed: 0, lastAction: null, shown: false, handName: null, handName2: null });
+    for(const p of this.seated()) Object.assign(p, { inHand: isIn(p), folded: false, allIn: false, hole: [], bet: 0, committed: 0, lastAction: null, shown: false, handName: null, handName2: null, startStack: p.chips });
 
     this.handCount++;
     const bomb = this.bombNext || (s.bombEvery > 0 && this.handCount % s.bombEvery === 0);
@@ -515,6 +521,7 @@ class Table {
       h.rabbit = r;
     }
     h.result = { uncontested: true, winners: [{ id: winner.id, seat: winner.seat, amount, hand: null }], pot };
+    this.recordHand(pot);
     this.addLog(`${winner.name} wins ${amount.toLocaleString()} — everyone else folded.`, 'win');
     h.actingSeat = -1;
     this.endHand(DELAY.foldWin + (h.rabbit ? 3500 : 0));
@@ -540,12 +547,40 @@ class Table {
     for(const r of runs) for(const w of r.winners) total.set(w.id, (total.get(w.id) || 0) + w.amount);
     const winners = [...total.entries()].map(([id, amount]) => { const p = this.players.get(id); return { id, seat: p.seat, amount, hand: p.handName }; });
     h.result = { uncontested: false, winners, runs: h.board2 ? runs : null, pot };
+    this.recordHand(pot);
     const winSeats = new Set(winners.map(w => w.seat));
     for(const p of live) if(!this.settings.muckLosers || winSeats.has(p.seat) || p.shown) this.addLog(`${p.name} shows ${p.hole.map(cardText).join(' ')} — ${p.handName}${h.board2 ? ` / ${p.handName2}` : ''}.`);
     if(h.board2) runs.forEach((r, i) => r.winners.forEach(w => this.addLog(`Run ${i + 1}: ${this.players.get(w.id).name} wins ${w.amount.toLocaleString()} with ${w.hand}.`, 'win')));
     else for(const w of winners) this.addLog(`${this.players.get(w.id).name} wins ${w.amount.toLocaleString()} with ${w.hand}.`, 'win');
     h.actingSeat = -1;
     this.endHand(DELAY.showdown + (h.board2 ? 2000 : 0));
+  }
+
+  // One record per person in the hand, for their personal hand history.
+  recordHand(pot){
+    const h = this.hand, records = [];
+    const ct = c => '23456789TJQKA'[c >> 2] + 'shdc'[c & 3];
+    const players = this.inHand().length;
+    for(const p of this.inHand()){
+      const delta = p.chips - p.startStack;
+      const won = delta > 0;
+      if(won){ p.handsWon++; p.biggestPot = Math.max(p.biggestPot, pot); }
+      if(p.isBot || !p.userId) continue;
+      records.push({ userId: p.userId, gameKey: this.gameKey, handNo: h.id, hole: p.hole.map(ct).join(' '),
+        board: h.board.map(ct).join(' '), board2: h.board2 ? h.board2.map(ct).join(' ') : null,
+        handName: p.folded ? null : (p.handName || null), delta, pot, won, folded: p.folded, players });
+    }
+    if(this.onHand && records.length) try { this.onHand(this, records); } catch(e){ console.error(e); }
+  }
+  // Running totals for one member, as saved to their game history.
+  summaryFor(p){
+    const h = this.hand;
+    const inPot = p.inHand && !(h && h.result) ? p.committed : 0;
+    const final = p.wallet + (p.seat >= 0 ? p.chips + p.pendingChips + inPot : 0);
+    const s = this.settings;
+    return { userId: p.userId, gameKey: this.gameKey, code: this.code, admin: (this.players.get(this.adminId) || {}).name || null,
+      startedAt: this.createdAt, given: p.buyInTotal, final, net: final - p.buyInTotal, hands: p.handsPlayed, handsWon: p.handsWon,
+      biggestPot: p.biggestPot, blinds: `${s.sb}/${s.bb}` };
   }
 
   // Side-pot aware split. Each contribution level is a layer; only live players who paid into a

@@ -16,6 +16,40 @@ Private No-Limit Hold'em tables for you and your friends. One person hosts a tab
 - **Ledger:** everyone's chips given, stack and net, so settling up is easy.
 - **Reconnects:** if someone's phone locks or their browser reloads, they return to the same seat.
 
+## Accounts and history
+
+Everyone logs in with their email and a password. Each account keeps:
+- every game played: date, game code, chips given, final chips, net result, hands played and won
+- every hand: your two cards, the board, the hand you made, the pot and how much you won or lost
+- totals across all games, with a chart of your running result
+
+Passwords are stored hashed (scrypt), never as plain text. The site can't send emails, so there's no "forgot password" link; the site owner resets passwords with `reset-password.js` (see below).
+
+### Where accounts are kept
+
+Render's free plan wipes the server's files whenever the site sleeps or restarts, so accounts need a free external database:
+
+1. Sign up at https://neon.com (free, no card needed).
+2. Create a project (any name, choose the region closest to you, e.g. Singapore).
+3. On the project dashboard click **Connect** and copy the connection string. It looks like `postgresql://user:password@ep-....neon.tech/neondb?sslmode=require`.
+4. In Render, open your service → **Environment** → **Add Environment Variable**: name `DATABASE_URL`, value = that connection string. Save; Render redeploys.
+
+The server creates its tables by itself on first start. Without `DATABASE_URL` it saves to a local `data.json` file instead, which is fine on your own computer but is wiped on Render.
+
+### Resetting someone's password
+
+On your own computer, in this folder (after `npm install`):
+
+```
+DATABASE_URL="your Neon connection string" node reset-password.js friend@email.com theirnewpassword
+```
+
+On Windows PowerShell:
+
+```
+$env:DATABASE_URL="your Neon connection string"; node reset-password.js friend@email.com theirnewpassword
+```
+
 ## Run it on your own computer
 
 1. Install Node.js (the LTS version) from https://nodejs.org.
@@ -95,6 +129,8 @@ All files sit side by side in one folder.
 | `table.js` | The rules: dealing, betting rounds, raises, side pots, showdown, timers |
 | `bots.js` | Computer players that compare their equity with the pot odds |
 | `engine.js` | Hand evaluator and equity engine, shared by the server and the browser |
+| `store.js` | Accounts, logins and history (Postgres, or data.json when no database is set) |
+| `reset-password.js` | Lets the site owner reset a player's password |
 | `index.html`, `app.js`, `style.css` | Everything in the browser: screens, table, animations, controls, the look |
 | `simulate.js` | Plays thousands of hands to check the rules (`npm test`) |
 
