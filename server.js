@@ -1,28 +1,48 @@
 // Home-game poker server: rooms with join codes, a host, blinds and buy-ins.
 // Run with `npm start`, then open http://localhost:3000
 const path = require('path');
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const { Table, validateSettings } = require('./table');
 const { createStore, hashPassword, checkPassword } = require('./store');
 const store = createStore();
+const mailer = require('./mailer');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { pingInterval: 10000, pingTimeout: 8000 });
+const io = new Server(server, { pingInterval: 10000, pingTimeout: 8000, perMessageDeflate: { threshold: 1024 } });
 
 // Only the website's own files are served; the server code stays private.
 const PUBLIC_FILES = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/engine.js': 'engine.js' };
-app.get(Object.keys(PUBLIC_FILES), (req, res) => res.sendFile(path.join(__dirname, PUBLIC_FILES[req.path])));
+// Files are read once and kept gzipped in memory, so pages load fast even on a phone connection.
+// The browser keeps a copy and only re-downloads a file after it changes (ETag).
+const zlib = require('zlib');
+const fs = require('fs');
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const fileCache = new Map();
+function cached(name){
+  if(!fileCache.has(name)){
+    const raw = fs.readFileSync(path.join(__dirname, name));
+    fileCache.set(name, { raw, gz: zlib.gzipSync(raw, { level: 9 }), etag: '"' + crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16) + '"', type: TYPES[path.extname(name)] });
+  }
+  return fileCache.get(name);
+}
+app.get(Object.keys(PUBLIC_FILES), (req, res) => {
+  const f = cached(PUBLIC_FILES[req.path]);
+  res.set({ 'Content-Type': f.type, ETag: f.etag, 'Cache-Control': 'no-cache', Vary: 'Accept-Encoding' });
+  if(req.headers['if-none-match'] === f.etag) return res.status(304).end();
+  if(/\bgzip\b/.test(req.headers['accept-encoding'] || '')){ res.set('Content-Encoding', 'gzip'); return res.end(f.gz); }
+  res.end(f.raw);
+});
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 const rooms = new Map(); // code -> Table
 
 // Private site: when ACCESS_KEY is set (in Render's Environment settings), only browsers that
 // arrived through a link containing ?key=<ACCESS_KEY> can connect. Leave it unset to run open.
-const crypto = require('crypto');
 const ACCESS_KEY = process.env.ACCESS_KEY || '';
 function keyOk(k){
   if(!ACCESS_KEY) return true;
@@ -67,7 +87,14 @@ function newCode(){
 const cleanName = n => String(n || '').replace(/\s+/g, ' ').trim().slice(0, 20);
 const cleanCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
 
+// Several changes in the same moment (an action, then the turn moving on) go out as one update.
+const pendingBroadcast = new Set();
 function broadcast(table){
+  if(pendingBroadcast.has(table)) return;
+  pendingBroadcast.add(table);
+  setImmediate(() => { pendingBroadcast.delete(table); sendState(table); });
+}
+function sendState(table){
   for(const s of io.sockets.adapter.rooms.get(table.code) || []){
     const sock = io.sockets.sockets.get(s);
     if(sock) sock.emit('state', table.viewFor(sock.data.playerId));
@@ -100,7 +127,7 @@ function handleAsync(socket, event, fn){
   socket.on(event, async (payload, ack) => {
     if(typeof ack !== 'function') ack = () => {};
     try { ack({ ok: true, ...((await fn(payload || {})) || {}) }); }
-    catch(e){ ack({ ok: false, error: e.message || 'Something went wrong.' }); }
+    catch(e){ ack({ ok: false, error: e.message || 'Something went wrong.', code: e.code }); }
   });
 }
 const cleanEmail = e => String(e || '').trim().toLowerCase().slice(0, 120);
@@ -121,27 +148,96 @@ io.on('connection', socket => {
   };
   const signedIn = () => { if(!socket.data.user) throw new Error('Log in first.'); return socket.data.user; };
   handleAsync(socket, 'me', async () => ({ user: socket.data.user || null, storage: store.kind }));
+  // ----- email codes: 6 digits, stored hashed, 15 minutes, 5 tries -----
+  const hashCode = (email, code) => crypto.createHash('sha256').update(`${email}|${code}`).digest('hex');
+  async function sendCode(user, purpose){
+    const prev = await store.getCode(user.email, purpose);
+    if(prev && Date.now() - prev.sentAt < 30000) return;   // just sent one; don't spam their inbox
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    await store.saveCode(user.email, purpose, hashCode(user.email, code), Date.now() + 15 * 60000);
+    const m = mailer.codeEmail(purpose, user.name, code);
+    await mailer.sendMail(user.email, m.subject, m.html, m.text);
+  }
+  async function checkCode(email, purpose, code){
+    const c = await store.getCode(email, purpose);
+    if(!c || c.expiresAt < Date.now()) throw new Error('That code has expired. Send a new one.');
+    if(c.attempts >= 5) throw new Error('Too many wrong codes. Send a new one.');
+    const a = Buffer.from(c.codeHash, 'hex'), b = Buffer.from(hashCode(email, String(code || '').trim()), 'hex');
+    if(!crypto.timingSafeEqual(a, b)){ await store.bumpCode(email, purpose); throw new Error('That code is not right. Check the email and try again.'); }
+    await store.deleteCode(email, purpose);
+  }
+  const unverified = () => Object.assign(new Error('Enter the code we emailed you to confirm your account.'), { code: 'unverified' });
+  async function signIn(user){
+    const pub = { id: user.id, email: user.email, name: user.name };
+    const token = await store.createSession(pub.id);
+    socket.data.user = pub;
+    return { user: pub, token };
+  }
+
   handleAsync(socket, 'signup', async ({ email, name, password }) => {
     limit();
     email = cleanEmail(email); name = cleanName(name); password = String(password || '');
     if(!emailOk(email)) throw new Error('Enter a valid email address.');
     if(!name) throw new Error('Enter the name other players will see.');
     if(password.length < 6) throw new Error('Use a password of at least 6 characters.');
-    const user = await store.createUser(email, name, hashPassword(password));
+    const useMail = mailer.enabled();
+    const existing = await store.findUserByEmail(email);
+    if(existing && existing.verified) throw new Error('That email already has an account. Log in instead.');
+    if(existing){   // signed up before but never confirmed: start again
+      await store.updateUnverified(existing.id, name, hashPassword(password));
+      await sendCode({ email, name }, 'verify');
+      return { needVerify: true, email };
+    }
+    const user = await store.createUser(email, name, hashPassword(password), !useMail);
     if(!user) throw new Error('That email already has an account. Log in instead.');
-    const token = await store.createSession(user.id);
-    socket.data.user = user;
-    return { user, token };
+    if(!useMail) return signIn(user);
+    await sendCode(user, 'verify');
+    return { needVerify: true, email };
   });
   handleAsync(socket, 'login', async ({ email, password }) => {
     limit();
     const u = await store.findUserByEmail(cleanEmail(email));
     if(!u || !checkPassword(String(password || ''), u.pass)) throw new Error('Wrong email or password.');
-    const user = { id: u.id, email: u.email, name: u.name };
-    const token = await store.createSession(user.id);
-    socket.data.user = user;
-    return { user, token };
+    if(u.verified === false && mailer.enabled()){ await sendCode(u, 'verify'); throw unverified(); }
+    return signIn(u);
   });
+  handleAsync(socket, 'verifyEmail', async ({ email, code }) => {
+    limit();
+    email = cleanEmail(email);
+    const u = await store.findUserByEmail(email);
+    if(!u) throw new Error('No account uses that email.');
+    await checkCode(email, 'verify', code);
+    await store.setVerified(u.id);
+    return signIn(u);
+  });
+  handleAsync(socket, 'resendCode', async ({ email, purpose }) => {
+    limit();
+    email = cleanEmail(email);
+    const u = await store.findUserByEmail(email);
+    purpose = purpose === 'reset' ? 'reset' : 'verify';
+    if(u && (purpose === 'reset' || !u.verified)) await sendCode(u, purpose);
+    return { sent: true };
+  });
+  handleAsync(socket, 'forgotPassword', async ({ email }) => {
+    limit();
+    if(!mailer.enabled()) throw new Error('Password reset emails are not set up on this site. Ask the site owner to reset it.');
+    email = cleanEmail(email);
+    if(!emailOk(email)) throw new Error('Enter a valid email address.');
+    const u = await store.findUserByEmail(email);
+    if(u) await sendCode(u, 'reset');
+    return { sent: true };   // same answer either way, so nobody can test which emails have accounts
+  });
+  handleAsync(socket, 'resetPassword', async ({ email, code, password }) => {
+    limit();
+    email = cleanEmail(email); password = String(password || '');
+    if(password.length < 6) throw new Error('Use a password of at least 6 characters.');
+    const u = await store.findUserByEmail(email);
+    if(!u) throw new Error('That code is not right. Check the email and try again.');
+    await checkCode(email, 'reset', code);
+    await store.setPassword(u.id, hashPassword(password));   // also signs out every other device
+    return signIn(u);
+  });
+  handleAsync(socket, 'mailStatus', async () => ({ enabled: mailer.enabled() }));
   handleAsync(socket, 'logout', async ({ token }) => { if(token) await store.deleteSession(String(token)); socket.data.user = null; });
   handleAsync(socket, 'history', async () => ({ games: await store.history(signedIn().id) }));
   handleAsync(socket, 'gameHands', async ({ gameKey }) => ({ hands: await store.gameHands(signedIn().id, String(gameKey || '')) }));

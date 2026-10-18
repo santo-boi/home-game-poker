@@ -6,7 +6,7 @@ const { BOTS, botDecide } = require('./bots');
 
 const MAX_SEATS = 10;
 const SPEED = Number(process.env.POKER_SPEED || 1); // tests set this below 1 to fast-forward every delay
-const DELAY = { afterAction: 450, street: 900, runoutStreet: 1600, runoutRiver: 1600, showdown: 6500, foldWin: 3200, botMin: 900, botMax: 2200 };
+const DELAY = { afterAction: 250, street: 400, runoutStreet: 1200, runoutRiver: 1300, showdown: 4200, foldWin: 1900, botMin: 600, botMax: 1500 };
 const SEAT_ORDER = [0, 5, 3, 8, 1, 6, 2, 7, 4, 9]; // fill seats so players spread around the table
 
 // Everything the host can change, with defaults.
@@ -253,7 +253,7 @@ class Table {
     if(!force && !this.settings.autoDeal) return;
     if(this.eligible().length < 2) return;
     this.startPending = true;
-    this.later(1200, () => { this.startPending = false; this.startHand(); this.changed(); });
+    this.later(600, () => { this.startPending = false; this.startHand(); this.changed(); });
   }
   eligible(){ return this.seated().filter(p => p.chips > 0 && !p.sittingOut && !p.leaving && !p.standing && (p.isBot || p.connected)); }
 
@@ -291,7 +291,7 @@ class Table {
     for(let r = 0; r < 2; r++) for(const x of order) this.seats[x].hole.push(deck.pop());
     this.addLog(`Hand #${this.hand.id}${bomb ? ' — bomb pot' : ''} — ${this.seats[this.dealerSeat].name} has the button.`, 'hand');
 
-    const dealTime = 1400 + 160 * order.length;
+    const dealTime = 650 + 120 * order.length;
     if(bomb){
       for(const x of order) this.postDead(this.seats[x], s.bb * s.bombBB, 'Bomb pot');
       this.later(dealTime, () => {
@@ -300,7 +300,7 @@ class Table {
         h.deck.pop(); h.board.push(h.deck.pop(), h.deck.pop(), h.deck.pop());
         h.street = 'flop';
         this.addLog(`Flop: ${h.board.map(cardText).join(' ')}`, 'board');
-        this.later(1300, () => {
+        this.later(950, () => {
           if(this.canAct().length <= 1) this.advance();
           else this.setTurn(this.nextSeat(this.dealerSeat, p => p.inHand && !p.folded && !p.allIn));
           this.changed();
@@ -484,10 +484,10 @@ class Table {
       h.street = nextStreet;
       h.dramatic = runout && nextStreet === 'river';
       this.addLog(`${nextStreet[0].toUpperCase() + nextStreet.slice(1)}: ${h.board.map(cardText).join(' ')}`, 'board');
-      if(runout) this.later(nextStreet === 'flop' ? 1800 : 1100, () => { this.advance(); this.changed(); });
+      if(runout) this.later(nextStreet === 'flop' ? 1300 : 900, () => { this.advance(); this.changed(); });
       else {
         const first = this.nextSeat(this.dealerSeat, p => p.inHand && !p.folded && !p.allIn);
-        this.later(nextStreet === 'flop' ? 1300 : 900, () => { this.setTurn(first); this.changed(); });
+        this.later(nextStreet === 'flop' ? 950 : 700, () => { this.setTurn(first); this.changed(); });
       }
       this.changed();
     });
@@ -501,7 +501,7 @@ class Table {
       while(b2.length < 5){ h.deck.pop(); b2.push(h.deck.pop()); }
       h.board2 = b2;
       this.addLog(`Second run: ${b2.map(cardText).join(' ')}`, 'board');
-      this.later(800 * (5 - h.runFrom) + 1200, () => { this.showdown(); this.changed(); });
+      this.later(550 * (5 - h.runFrom) + 900, () => { this.showdown(); this.changed(); });
       this.changed();
     });
   }
@@ -524,7 +524,7 @@ class Table {
     this.recordHand(pot);
     this.addLog(`${winner.name} wins ${amount.toLocaleString()} — everyone else folded.`, 'win');
     h.actingSeat = -1;
-    this.endHand(DELAY.foldWin + (h.rabbit ? 3500 : 0));
+    this.endHand(DELAY.foldWin + (h.rabbit ? 2000 : 0));
   }
 
   showdown(){
@@ -553,7 +553,7 @@ class Table {
     if(h.board2) runs.forEach((r, i) => r.winners.forEach(w => this.addLog(`Run ${i + 1}: ${this.players.get(w.id).name} wins ${w.amount.toLocaleString()} with ${w.hand}.`, 'win')));
     else for(const w of winners) this.addLog(`${this.players.get(w.id).name} wins ${w.amount.toLocaleString()} with ${w.hand}.`, 'win');
     h.actingSeat = -1;
-    this.endHand(DELAY.showdown + (h.board2 ? 2000 : 0));
+    this.endHand(DELAY.showdown + (h.board2 ? 1500 : 0));
   }
 
   // One record per person in the hand, for their personal hand history.

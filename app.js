@@ -60,6 +60,8 @@ function noise(d = .05, v = .05, hp = 2000){
   const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
   f.type = 'highpass'; f.frequency.value = hp; g.gain.value = v; s.buffer = b; s.connect(f).connect(g).connect(a.destination); s.start();
 }
+// iPhones only show the pressed-in look on buttons when the page listens for touches
+document.addEventListener('touchstart', () => {}, { passive: true });
 const SFX = {
   deal: () => noise(.045, .06, 2600), flip: () => noise(.08, .05, 1200), chip: () => { tone(2400, .05, 'triangle', .04); tone(3100, .04, 'triangle', .03, .04); },
   turn: () => { tone(660, .15, 'sine', .06); tone(990, .2, 'sine', .05, .12); }, tick: () => tone(1400, .03, 'square', .02),
@@ -241,8 +243,16 @@ function landing(mode = 'join', code = ''){
 }
 
 /* ================= accounts ================= */
-function authPage(mode = 'login', msg = ''){
+// mode: login | signup | verify | forgot | reset   (ctx.email carries over between steps)
+function authPage(mode = 'login', msg = '', ctx = {}){
   ui.view = 'auth'; ui.built = false;
+  const tabs = mode === 'login' || mode === 'signup';
+  const titles = { verify: 'Check your email', forgot: 'Reset your password', reset: 'Choose a new password' };
+  const intro = {
+    verify: `We sent a 6-digit code to <b>${esc(ctx.email || '')}</b>. Enter it to confirm your account. Check your spam folder if it isn't in your inbox.`,
+    forgot: "Enter your account's email and we'll send you a code.",
+    reset: `Enter the code we sent to <b>${esc(ctx.email || '')}</b> and your new password.`,
+  };
   app.innerHTML = `
   <main class="landing">
     <section class="landing-hero">
@@ -254,34 +264,55 @@ function authPage(mode = 'login', msg = ''){
     </section>
     <section class="landing-forms">
       <div class="panel-card">
-        <div class="tabs" role="tablist">
+        ${tabs ? `<div class="tabs" role="tablist">
           <button role="tab" data-mode="login" aria-selected="${mode === 'login'}">Log in</button>
           <button role="tab" data-mode="signup" aria-selected="${mode === 'signup'}">Create account</button>
-        </div>
+        </div>` : `<div><h2 class="auth-title">${titles[mode]}</h2><p class="dim auth-intro">${intro[mode]}</p></div>`}
         <form id="authForm" class="stack" autocomplete="on">
-          <div class="field"><label for="aEmail">Email</label><input id="aEmail" type="email" autocomplete="email" required></div>
+          ${mode === 'login' || mode === 'signup' || mode === 'forgot' ? `<div class="field"><label for="aEmail">Email</label><input id="aEmail" type="email" autocomplete="email" value="${esc(ctx.email || '')}" required></div>` : ''}
           ${mode === 'signup' ? `<div class="field"><label for="aName">Name at the table</label><input id="aName" maxlength="20" autocomplete="nickname" required><span class="hint">What other players see, for example Santo.</span></div>` : ''}
-          <div class="field"><label for="aPass">Password</label><input id="aPass" type="password" minlength="6" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" required>${mode === 'signup' ? '<span class="hint">At least 6 characters.</span>' : ''}</div>
+          ${mode === 'verify' || mode === 'reset' ? `<div class="field"><label for="aCode">6-digit code</label><input id="aCode" class="code-input otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="······" required></div>` : ''}
+          ${mode === 'login' || mode === 'signup' || mode === 'reset' ? `<div class="field"><label for="aPass">${mode === 'reset' ? 'New password' : 'Password'}</label><input id="aPass" type="password" minlength="6" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" required>${mode !== 'login' ? '<span class="hint">At least 6 characters.</span>' : ''}</div>` : ''}
           <div class="error" id="aErr">${esc(msg)}</div>
-          <button class="btn btn-primary" type="submit">${mode === 'signup' ? 'Create account' : 'Log in'}</button>
-          ${mode === 'login' ? '<p class="hint-line">Forgot your password? Ask the person who runs this site to reset it.</p>' : ''}
+          <div class="ok-msg" id="aOk"></div>
+          <button class="btn btn-primary" type="submit">${{ login: 'Log in', signup: 'Create account', verify: 'Confirm', forgot: 'Send code', reset: 'Save new password' }[mode]}</button>
+          ${mode === 'login' ? '<button type="button" class="link-btn" id="aForgot">Forgot your password?</button>' : ''}
+          ${mode === 'verify' || mode === 'reset' ? '<button type="button" class="link-btn" id="aResend">Send a new code</button>' : ''}
+          ${!tabs ? '<button type="button" class="link-btn" id="aBack">Back to log in</button>' : ''}
         </form>
       </div>
     </section>
   </main>`;
   fanCards();
-  $$('.tabs button').forEach(b => b.onclick = () => authPage(b.dataset.mode));
-  $('#aEmail').focus();
+  $$('.tabs button').forEach(b => b.onclick = () => authPage(b.dataset.mode, '', { email: $('#aEmail') ? $('#aEmail').value : '' }));
+  const first = $('#aCode') || $('#aEmail'); if(first) first.focus();
+  if($('#aForgot')) $('#aForgot').onclick = () => authPage('forgot', '', { email: $('#aEmail').value });
+  if($('#aBack')) $('#aBack').onclick = () => authPage('login', '', ctx);
+  if($('#aResend')) $('#aResend').onclick = async () => {
+    const r = await emit('resendCode', { email: ctx.email, purpose: mode === 'reset' ? 'reset' : 'verify' });
+    $('#aErr').textContent = r.ok ? '' : r.error; $('#aOk').textContent = r.ok ? 'A new code is on its way.' : '';
+  };
+  if($('#aCode')) $('#aCode').oninput = e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); };
+  const done = r => { setAuth(r.token); ui.user = r.user; toast(`Welcome, ${r.user.name}`); startSignedIn(); };
   $('#authForm').onsubmit = async e => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
-    const data = { email: $('#aEmail').value, password: $('#aPass').value, name: $('#aName') ? $('#aName').value : undefined };
-    const r = await emit(mode === 'signup' ? 'signup' : 'login', data);
+    const v = id => $(id) ? $(id).value : undefined;
+    let r;
+    if(mode === 'signup') r = await emit('signup', { email: v('#aEmail'), name: v('#aName'), password: v('#aPass') });
+    else if(mode === 'login') r = await emit('login', { email: v('#aEmail'), password: v('#aPass') });
+    else if(mode === 'verify') r = await emit('verifyEmail', { email: ctx.email, code: v('#aCode') });
+    else if(mode === 'forgot') r = await emit('forgotPassword', { email: v('#aEmail') });
+    else r = await emit('resetPassword', { email: ctx.email, code: v('#aCode'), password: v('#aPass') });
     btn.disabled = false;
-    if(!r.ok) return $('#aErr').textContent = r.error;
-    setAuth(r.token); ui.user = r.user;
-    toast(mode === 'signup' ? `Welcome, ${r.user.name}` : `Welcome back, ${r.user.name}`);
-    startSignedIn();
+    if(!r.ok){
+      if(r.code === 'unverified') return authPage('verify', '', { email: v('#aEmail') });
+      return $('#aErr').textContent = r.error;
+    }
+    if(r.needVerify) return authPage('verify', '', { email: r.email });
+    if(mode === 'forgot') return authPage('reset', '', { email: v('#aEmail').trim().toLowerCase() });
+    if(mode === 'reset') toast('Password changed');
+    done(r);
   };
 }
 async function logout(){
@@ -362,6 +393,11 @@ function queueAnim(fn){
   ui.animQ = ui.animQ.then(() => (ui.view === 'table' && S ? fn() : null)).catch(e => console.error(e));
 }
 
+// Only touch the page when something really changed: every write costs the browser a restyle.
+const setText = (el, v) => { if(el && el.textContent !== v) el.textContent = v; };
+const setHTML = (el, v) => { if(el && el._h !== v){ el._h = v; el.innerHTML = v; } };
+const setClass = (el, v) => { if(el && el.className !== v) el.className = v; };
+
 /* ================= cards ================= */
 function cardEl(c){
   const el = document.createElement('div');
@@ -376,7 +412,7 @@ function setFace(el, c){
   f.innerHTML = `<span class="rk">${r === 'T' ? '10' : r}</span><span class="st">${SUITS[s]}</span><span class="big">${SUITS[s]}</span>`;
   el.dataset.c = c;
 }
-function flipUp(el, delay = 0){ return new Promise(res => setTimeout(() => { el.classList.add('up'); SFX.flip(); setTimeout(res, 520); }, reduced ? 0 : delay)); }
+function flipUp(el, delay = 0){ return new Promise(res => setTimeout(() => { el.classList.add('up'); SFX.flip(); setTimeout(res, reduced ? 0 : 400); }, reduced ? 0 : delay)); }
 // A card flies from the deck to where `target` sits, then `target` appears in its place.
 function fly(target, delay = 0, spin = -18){
   return new Promise(res => {
@@ -389,7 +425,7 @@ function fly(target, delay = 0, spin = -18){
       const a = f.animate([
         { transform: `translate(${deck.left - to.width / 2}px, ${deck.top}px) rotate(${spin}deg) scale(.55)`, opacity: .2 },
         { transform: `translate(${to.left}px, ${to.top}px) rotate(0deg) scale(1)`, opacity: 1 }
-      ], { duration: 380, easing: 'cubic-bezier(.2,.75,.25,1)' });
+      ], { duration: 300, easing: 'cubic-bezier(.2,.75,.25,1)' });
       a.onfinish = () => { f.remove(); target.style.visibility = ''; res(); };
     }, reduced ? 0 : delay);
   });
@@ -402,7 +438,7 @@ function flyChip(fromEl, toEl, delay = 0){
     const c = document.createElement('div'); c.className = 'flying-chip'; document.body.appendChild(c);
     const x0 = a.left + a.width / 2 - 8, y0 = a.top + a.height / 2 - 8, x1 = b.left + b.width / 2 - 8, y1 = b.top + b.height / 2 - 8;
     c.animate([{ transform: `translate(${x0}px,${y0}px)` }, { transform: `translate(${(x0 + x1) / 2}px,${Math.min(y0, y1) - 40}px)`, offset: .5 }, { transform: `translate(${x1}px,${y1}px)` }],
-      { duration: 650, easing: 'cubic-bezier(.3,.6,.3,1)' }).onfinish = () => { c.remove(); SFX.chip(); };
+      { duration: 450, easing: 'cubic-bezier(.3,.6,.3,1)' }).onfinish = () => { c.remove(); SFX.chip(); };
   }, delay);
 }
 
@@ -431,7 +467,7 @@ async function invite(){
   try { await navigator.clipboard.writeText(url); toast('Invite link copied'); } catch(e){ prompt('Copy this link', url); }
 }
 function buildTable(){
-  ui.built = true; ui.view = 'table'; ui.boardShown = 0; ui.handShown = null; ui.resultShown = null; ui.instant = true;
+  ui.built = true; ui.view = 'table'; ui.fitKey = ui.layoutKey = ''; ui.ringEl = null; ui.boardShown = 0; ui.handShown = null; ui.resultShown = null; ui.instant = true;
   try { sessionStorage.setItem('hgView', 'table'); } catch(e){}
   app.innerHTML = `
   <div class="game ${ui.panelOpen ? 'panel-open' : ''}" id="game">
@@ -490,7 +526,7 @@ function togglePanel(tab){
   $('#side').classList.toggle('open', ui.panelOpen);
   $('#game').classList.toggle('panel-open', ui.panelOpen);
   $('#sideBody').dataset.key = ''; $('#sideTabs').dataset.key = '';
-  renderSide(); layout();
+  ui.fitKey = ''; renderSide(); layout();
 }
 // chip amounts, optionally shown in big blinds
 const fmtC = n => ui.bbMode && S ? `${(Math.round(n / S.settings.bb * 10) / 10).toLocaleString('en-IN')} BB` : fmt(n);
@@ -513,6 +549,9 @@ function fitTable(){
   const W = st.clientWidth, H = st.clientHeight, pt = portrait();
   const ar = pt ? 0.64 : 2.05;
   const w = Math.max(220, Math.min(W * (pt ? 0.9 : 0.84), H * (pt ? 0.86 : 0.78) * ar));
+  const fk = `${W}x${H}${pt}`;
+  if(ui.fitKey === fk) return;
+  ui.fitKey = fk;
   t.style.width = w + 'px'; t.style.height = (w / ar) + 'px';
   const k = pt ? Math.min(1.15, Math.max(0.72, w / 330)) : Math.min(1.2, Math.max(0.55, w / 900));
   const r = document.documentElement.style;
@@ -523,13 +562,16 @@ function fitTable(){
 }
 function layout(){
   fitTable();
+  const lk = `${ui.fitKey}|${S.youSeat}|${S.hand ? S.hand.dealerSeat : -1}`;
+  if(ui.layoutKey === lk) return;
+  ui.layoutKey = lk;
   for(let i = 0; i < 10; i++){
     const v = vis(i), [x, y] = seatXY(v), [bx, by] = toward([x, y], portrait() ? (v === 0 ? .5 : .55) : .58);
     const seat = $('#seat' + i), bet = $('#bet' + i);
     seat.style.left = x + '%'; seat.style.top = y + '%';
     bet.style.left = bx + '%'; bet.style.top = (by + (v === 0 && !portrait() ? -6 : 0)) + '%';
   }
-  if(S.hand){
+  if(S.hand && S.hand.dealerSeat >= 0){
     const [x, y] = seatXY(vis(S.hand.dealerSeat)), [dx, dy] = toward([x, y], .72);
     const d = $('#dealerBtn'); d.classList.remove('hidden');
     d.style.left = (dx + (x <= 50 ? 6 : -6)) + '%'; d.style.top = dy + '%';
@@ -541,15 +583,15 @@ function update(){
   if(ui.view !== 'table') return;
   if(!ui.built) buildTable();
   const h = S.hand, ph = P && P.hand;
-  $('#roomCode').textContent = S.code;
-  $('#feltBlinds').textContent = `Blinds ${fmtC(S.settings.sb)} / ${fmtC(S.settings.bb)}${S.settings.ante ? ` · ante ${fmtC(S.settings.ante)}` : ''}`;
+  setText($('#roomCode'), S.code);
+  setText($('#feltBlinds'), `Blinds ${fmtC(S.settings.sb)} / ${fmtC(S.settings.bb)}${S.settings.ante ? ` · ante ${fmtC(S.settings.ante)}` : ''}`);
   $('.felt-mark').classList.toggle('quiet', !!h);
   $('#table').classList.toggle('no-hand', !h);
   renderStatus();
   const nReq = S.requests.length + S.joinRequests.length;
   $('#reqBtn').classList.toggle('hidden', !S.isAdmin || !nReq);
-  $('#reqCount').textContent = nReq;
-  $('#chatBadge').classList.toggle('hidden', !ui.unread); $('#chatBadge').textContent = ui.unread;
+  setText($('#reqCount'), String(nReq));
+  $('#chatBadge').classList.toggle('hidden', !ui.unread); setText($('#chatBadge'), String(ui.unread));
   layout();
   const newHand = h && h.id !== ui.handShown;
   if(!h && ui.handShown != null){ clearTableForNextHand(); }
@@ -584,6 +626,7 @@ function clearTableForNextHand(){
   ui.board2Shown = false; ui.rabbitShown = false;
   $('#banner').classList.remove('show');
   $('#dealerBtn').classList.toggle('hidden', true);
+  ui.layoutKey = '';
 }
 
 function renderSeats(newHand){
@@ -616,15 +659,15 @@ function renderSeats(newHand){
     }
     const acting = h && h.actingSeat === i;
     const winner = h && h.result && h.result.winners.some(w => w.seat === i);
-    el.className = 'seat' + (i === S.youSeat ? ' me' : '') + (acting ? ' acting' : '') + (p.folded ? ' folded' : '') +
-      (p.sittingOut || (!p.inHand && h) || (p.chips === 0 && !p.inHand) ? ' out' : '') + (!p.connected && !p.isBot ? ' offline' : '') + (winner ? ' winner' : '');
-    el.querySelector('.name').innerHTML = esc(p.name) + (p.isAdmin ? `<span class="host-mark" title="Admin">${ICON2.shield}</span>` : '') + (p.isBot ? '<span class="host-mark botmark" title="Computer player">· bot</span>' : '');
-    el.querySelector('.chips').textContent = (p.chips === 0 && !p.inHand ? 'No chips' : p.standing ? `${fmtC(p.chips)} · leaving` : p.sittingOut ? `${fmtC(p.chips)} · away` : fmtC(p.chips))
-      + (p.pendingChips ? ` +${fmtC(p.pendingChips)}` : '');
+    setClass(el, 'seat' + (i === S.youSeat ? ' me' : '') + (acting ? ' acting' : '') + (p.folded ? ' folded' : '') +
+      (p.sittingOut || (!p.inHand && h) || (p.chips === 0 && !p.inHand) ? ' out' : '') + (!p.connected && !p.isBot ? ' offline' : '') + (winner ? ' winner' : ''));
+    setHTML(el.querySelector('.name'), esc(p.name) + (p.isAdmin ? `<span class="host-mark" title="Admin">${ICON2.shield}</span>` : '') + (p.isBot ? '<span class="host-mark botmark" title="Computer player">· bot</span>' : ''));
+    setText(el.querySelector('.chips'), (p.chips === 0 && !p.inHand ? 'No chips' : p.standing ? `${fmtC(p.chips)} · leaving` : p.sittingOut ? `${fmtC(p.chips)} · away` : fmtC(p.chips))
+      + (p.pendingChips ? ` +${fmtC(p.pendingChips)}` : ''));
     const tag = el.querySelector('.tag');
     const label = p.allIn ? 'All-in' : p.lastAction;
-    tag.textContent = label || ''; tag.className = 'tag' + (label ? ' show' : '') + (p.folded ? ' fold' : '') + (p.allIn ? ' allin' : '');
-    el.querySelector('.hand-name').textContent = p.handName || '';
+    setText(tag, label || ''); setClass(tag, 'tag' + (label ? ' show' : '') + (p.folded ? ' fold' : '') + (p.allIn ? ' allin' : ''));
+    setText(el.querySelector('.hand-name'), p.handName || '');
     if(!newHand && !ui.dealing) syncSeatCards(i, p);
   });
 }
@@ -641,7 +684,7 @@ function syncSeatCards(i, p){
   const els = $$('.card', box);
   if(els.length === 2 && old && old.startsWith('back') && typeof cards[0] === 'number'){
     // reveal: turn the opponent's cards over
-    const d = 120 * ((vis(i) + 9) % 10);
+    const d = 70 * ((vis(i) + 9) % 10);
     els.forEach((el, k) => { setFace(el, cards[k]); flipUp(el, d + k * 140); });
     return;
   }
@@ -669,13 +712,13 @@ async function startDealAnimation(){
   }
   const flights = [];
   let t = 0;
-  for(let r = 0; r < 2; r++) for(const s of order){ flights.push(fly(slots[s][r], t, r ? 14 : -18)); t += 110; }
+  for(let r = 0; r < 2; r++) for(const s of order){ flights.push(fly(slots[s][r], t, r ? 14 : -18)); t += 60; }
   await Promise.all(flights);
   // my cards turn over
   const me = S.seats[S.youSeat];
   if(me && me.inHand && Array.isArray(me.cards) && typeof me.cards[0] === 'number' && slots[S.youSeat]){
     slots[S.youSeat].forEach((el, k) => setFace(el, me.cards[k]));
-    await Promise.all(slots[S.youSeat].map((el, k) => flipUp(el, 120 + k * 160)));
+    await Promise.all(slots[S.youSeat].map((el, k) => flipUp(el, 40 + k * 90)));
   }
   ui.dealing = false;
   for(const s of order){ const box = $('#seat' + s + ' .cards'); const p = S.seats[s]; if(box && p) box.dataset.key = slots[s].map((el, k) => typeof (p.cards || [])[k] === 'number' && el.classList.contains('up') ? p.cards[k] : 'back').join(','); }
@@ -692,9 +735,8 @@ function syncBoard(){
     if(ui.view !== 'table') return;
     const slots = $$('#board .slot');
     const els = cards.map((c, k) => { const el = cardEl(c); el.style.visibility = 'hidden'; slots[from + k].innerHTML = ''; slots[from + k].appendChild(el); return el; });
-    await Promise.all(els.map((el, k) => fly(el, k * 120, -10)));
-    if(to === 3){ for(let k = 0; k < 3; k++) await flipUp(els[k], k ? 60 : 200); }
-    else await flipUp(els[0], 250);
+    await Promise.all(els.map((el, k) => fly(el, k * 70, -10)));
+    await Promise.all(els.map((el, k) => flipUp(el, 60 + k * 90)));
     renderSide();
   });
 }
@@ -703,7 +745,7 @@ function renderBets(ph){
   S.seats.forEach((p, i) => {
     const el = $('#bet' + i), v = p && p.inHand ? p.bet : 0;
     const prevBet = ph && P.seats[i] && P.hand && S.hand && P.hand.id === S.hand.id ? P.seats[i].bet : 0;
-    if(v > 0){ el.classList.remove('zero'); el.querySelector('.v').textContent = fmtC(v); if(v > prevBet && prevBet >= 0 && P) SFX.chip(); }
+    if(v > 0){ el.classList.remove('zero'); setText(el.querySelector('.v'), fmtC(v)); if(v > prevBet && prevBet >= 0 && P && i !== S.youSeat) SFX.chip(); }
     else {
       if(prevBet > 0 && S.hand && P.hand && S.hand.id === P.hand.id) flyChip(el, $('#pot'));   // bets swept into the pot
       el.classList.add('zero');
@@ -714,13 +756,13 @@ function renderPot(){
   const h = S.hand, pot = $('#pot');
   if(!h || (h.potBehind || 0) === 0){ pot.classList.add('empty'); return; }
   pot.classList.remove('empty');
-  $('#potAmt').textContent = fmtC(h.result ? h.result.pot : h.potBehind);
+  setText($('#potAmt'), fmtC(h.result ? h.result.pot : h.potBehind));
 }
 function renderResult(){
   const h = S.hand;
   if(!h || !h.result || ui.resultShown === h.id) return;
   ui.resultShown = h.id;
-  const delay = h.result.uncontested ? 300 : 700 + (h.board2 ? 600 : 0);
+  const delay = h.result.uncontested ? 150 : 350 + (h.board2 ? 300 : 0);
   queueAnim(async () => {
     await sleep(delay);
     if(!S.hand || S.hand.id !== h.id) return;
@@ -757,9 +799,9 @@ function syncBoard2(){
     for(let k = 0; k < from; k++){ const el = cardEl(b2[k]); el.classList.add('up', 'shared'); slots[k].innerHTML = ''; slots[k].appendChild(el); }
     const els = [];
     for(let k = from; k < 5; k++){ const el = cardEl(b2[k]); el.style.visibility = 'hidden'; slots[k].innerHTML = ''; slots[k].appendChild(el); els.push(el); }
-    await sleep(400);
-    await Promise.all(els.map((el, k) => fly(el, k * 140, -10)));
-    for(const el of els) await flipUp(el, 200);
+    await sleep(150);
+    await Promise.all(els.map((el, k) => fly(el, k * 80, -10)));
+    for(const el of els) await flipUp(el, 90);
   });
 }
 // Rabbit hunting: after everyone folds, the cards that would have come appear dimmed.
@@ -768,11 +810,11 @@ function syncRabbit(){
   if(!h || !h.rabbit || ui.rabbitShown) return;
   ui.rabbitShown = true;
   queueAnim(async () => {
-    await sleep(700);
+    await sleep(300);
     const slots = $$('#board .slot');
     const els = h.rabbit.map((c, k) => { const el = cardEl(c); el.classList.add('rabbit'); el.style.visibility = 'hidden'; const sl = slots[h.board.length + k]; sl.innerHTML = ''; sl.appendChild(el); return el; });
-    await Promise.all(els.map((el, k) => fly(el, k * 120, -10)));
-    await Promise.all(els.map((el, k) => flipUp(el, 100 + k * 110)));
+    await Promise.all(els.map((el, k) => fly(el, k * 70, -10)));
+    await Promise.all(els.map((el, k) => flipUp(el, 60 + k * 90)));
   });
 }
 function renderStatus(){
@@ -802,7 +844,7 @@ function renderWaiting(){
   else if(S.status === 'paused'){ big = 'Paused'; small = S.isAdmin ? 'Resume when everyone is ready.' : 'The admin will resume the game.'; }
   else { big = `${seated.length} seated`; small = S.isAdmin ? (ready >= 2 ? 'Press Start game when everyone is in.' : 'At least two players need to sit down with chips.') : 'Waiting for the admin to start the game.'; }
   n.classList.remove('hidden');
-  n.innerHTML = `<div class="big">${esc(big)}</div><div>${esc(small)}</div>`;
+  setHTML(n, `<div class="big">${esc(big)}</div><div>${esc(small)}</div>`);
 }
 
 /* ================= actions ================= */
@@ -810,6 +852,7 @@ function renderActions(){
   const box = $('#actions'), o = S.options, me = S.youSeat >= 0 ? S.seats[S.youSeat] : null;
   if(o){
     const key = `${S.hand.id}-${S.hand.street}-${o.currentBet}-${o.myBet}-${ui.bbMode}`;
+    if(ui.sentKey === key) return;    // already acted: the server just hasn't answered yet
     if(box.dataset.key === key) return;
     box.dataset.key = key;
     ui.raiseOpen = false;
@@ -905,9 +948,18 @@ function renderActions(){
   on('sitIn', async () => { const r = await emit('sitOut', { value: false }); if(!r.ok) toast(r.error, true); });
   $$('[data-pre]', box).forEach(b => b.onclick = () => { ui.pre = ui.pre === b.dataset.pre ? null : b.dataset.pre; box.dataset.key = ''; renderActions(); });
 }
+// The buttons go away the moment you tap, without waiting for the server to answer.
 async function act(type, amount){
+  const box = $('#actions');
+  if(ui.sentKey && ui.sentKey === (box && box.dataset.key)) return;   // no double taps
+  ui.sentKey = box ? box.dataset.key : null;
+  if(box){
+    const word = { fold: 'You fold', check: 'You check', call: 'You call', raise: S.options && S.options.currentBet === 0 ? 'You bet' : 'You raise' }[type] || '';
+    box.innerHTML = `<span class="idle-note">${word}${type === 'raise' && amount ? ' ' + fmtC(amount) : ''}</span>`;
+    if(type === 'call' || type === 'raise') SFX.chip();
+  }
   const r = await emit('action', { type, amount });
-  if(!r.ok) toast(r.error, true);
+  if(!r.ok){ ui.sentKey = null; if(box) box.dataset.key = ''; toast(r.error, true); if(S) renderActions(); }
 }
 // A pre-selected move is played the moment it becomes your turn.
 function maybeAutoAct(){
@@ -935,15 +987,16 @@ async function host(cmd, extra = {}){
 /* ================= timer ring ================= */
 function tickTimers(){
   requestAnimationFrame(tickTimers);
-  if(!S || !S.hand || !ui.built) return;
-  const h = S.hand;
-  $$('.seat .ring circle').forEach(c => c.style.strokeDashoffset = 113.1);
-  if(h.actingSeat < 0 || !h.timerOn) return;
-  const c = $(`#seat${h.actingSeat} .ring circle`);
+  const h = S && ui.built && ui.view === 'table' && !document.hidden ? S.hand : null;
+  const seat = h && h.timerOn && h.actingSeat >= 0 ? h.actingSeat : -1;
+  const c = seat >= 0 ? $(`#seat${seat} .ring circle`) : null;
+  if(ui.ringEl && ui.ringEl !== c){ ui.ringEl.style.strokeDashoffset = 113.1; ui.ringEl = null; }
   if(!c) return;
+  ui.ringEl = c;
   const left = Math.max(0, h.turnMsLeft - (performance.now() - receivedAt));
-  c.style.strokeDashoffset = 113.1 * (1 - left / h.turnMs);
-  c.style.stroke = h.bankPhase ? 'var(--good)' : left < 5000 ? 'var(--danger)' : 'var(--brass)';
+  const off = (113.1 * (1 - left / h.turnMs)).toFixed(1), col = h.bankPhase ? 'var(--good)' : left < 5000 ? 'var(--danger)' : 'var(--brass)';
+  if(c._off !== off){ c._off = off; c.style.strokeDashoffset = off; }
+  if(c._col !== col){ c._col = col; c.style.stroke = col; }
   if(h.actingSeat === S.youSeat && left < 5000){
     const sec = Math.ceil(left / 1000);
     if(sec !== ui.lastTick){ ui.lastTick = sec; if(sec > 0) SFX.tick(); }
@@ -974,6 +1027,9 @@ function renderOdds(body){
   const live = h && !h.result && me && me.inHand && !me.folded && Array.isArray(me.cards) && typeof me.cards[0] === 'number' && !ui.dealing;
   const k = h ? h.liveOpponents : 0;
   const key = live ? `${me.cards.join(',')}|${shownBoard.join(',')}|${k}|${S.options ? S.options.toCall + '/' + S.options.pot : ''}` : `none-${h ? h.id : 'x'}-${me && me.folded}-${h && !!h.result}`;
+  // odds are only worked out while the panel is open, so they never slow the table down
+  const shown = ui.panelOpen && ui.tab === 'odds';
+  if(live && k >= 1 && !shown){ body.dataset.key = ''; return; }
   if(body.dataset.key === key) return;
   body.dataset.key = key;
   if(!live || k < 1){
@@ -982,8 +1038,9 @@ function renderOdds(body){
     return;
   }
   const ekey = `${me.cards.join(',')}|${shownBoard.join(',')}|${k}`;
-  if(ui.eqKey !== ekey){ ui.eqKey = ekey; ui.eq = PokerEngine.equity(me.cards, shownBoard, k); }
+  if(ui.eqKey !== ekey){ ui.eqKey = ekey; ui.eq = null; equityAsync(me.cards, shownBoard, k, ekey); }
   const e = ui.eq;
+  if(!e){ body.dataset.key = ''; body.innerHTML = `<div class="odds"><h3>Your odds</h3><p class="method">Working out your odds…</p></div>`; return; }
   const pct = x => (Math.round(x * 1000) / 10).toFixed(1) + '%';
   const method = e.method === 'precomputed' ? `Exact · all ${fmt(e.trials)} deals (precomputed)` : e.exact ? `Exact · ${fmt(e.trials)} showdowns counted` : `Simulated · ${fmt(e.trials)} deals · ±${(e.ci95 * 100).toFixed(1)}%`;
   const best = shownBoard.length >= 3 ? PokerEngine.bestHandName([...me.cards, ...shownBoard]) : null;
@@ -999,6 +1056,24 @@ function renderOdds(body){
     ${best ? `<div class="best-hand">You have <b>${esc(best.toLowerCase())}</b></div>` : ''}
     ${need != null ? `<div class="pot-odds">Calling ${fmt(o.toCall)} to win ${fmt(o.pot + o.toCall)} needs ${pct(need)} equity — ${e.equity >= need ? 'you have more than that.' : 'you have less than that.'}</div>` : ''}
   </div>`;
+}
+// The odds maths runs in a background worker so cards and buttons never freeze while it counts.
+let eqWorker = null, eqJob = null;
+function equityAsync(cards, board, k, ekey){
+  const done = (key, r) => { if(ui.eqKey !== key) return; ui.eq = r; if(ui.view === 'table' && $('#sideBody')){ $('#sideBody').dataset.key = ''; renderSide(); } };
+  const onMain = () => setTimeout(() => done(ekey, PokerEngine.equity(cards, board, k)), 30);
+  eqJob = { cards, board, k, key: ekey };
+  if(eqWorker === 'off' || !window.Worker) return onMain();
+  try {
+    if(!eqWorker){
+      const src = `importScripts(${JSON.stringify(location.origin + '/engine.js')});onmessage=e=>postMessage({key:e.data.key,r:PokerEngine.equity(e.data.cards,e.data.board,e.data.k)});`;
+      eqWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      eqWorker.onmessage = e => done(e.data.key, e.data.r);
+      // if the worker can't start, do the maths on the page instead
+      eqWorker.onerror = () => { eqWorker = 'off'; const j = eqJob; if(j) setTimeout(() => done(j.key, PokerEngine.equity(j.cards, j.board, j.k)), 30); };
+    }
+    eqWorker.postMessage(eqJob);
+  } catch(err){ eqWorker = 'off'; onMain(); }
 }
 function renderLog(body){
   const key = 'log' + (S.log[0] ? S.log[0].t + S.log.length : '');

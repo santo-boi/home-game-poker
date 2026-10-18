@@ -23,7 +23,22 @@ Everyone logs in with their email and a password. Each account keeps:
 - every hand: your two cards, the board, the hand you made, the pot and how much you won or lost
 - totals across all games, with a chart of your running result
 
-Passwords are stored hashed (scrypt), never as plain text. The site can't send emails, so there's no "forgot password" link; the site owner resets passwords with `reset-password.js` (see below).
+Passwords are stored hashed (scrypt), never as plain text. When email is set up (below), new accounts confirm their email with a 6-digit code and anyone can reset a forgotten password from the "Forgot your password?" link. Without email set up, accounts work without codes and the site owner resets passwords with `reset-password.js`.
+
+### Sending emails (confirmation and password-reset codes)
+
+Render's free plan blocks normal email sending, so the site uses Brevo's email API (free, 300 emails a day):
+
+1. Sign up at https://www.brevo.com (free plan).
+2. Go to **Senders, Domains & Dedicated IPs → Senders → Add a sender**. Use your own email (e.g. your Gmail) and confirm it from the email Brevo sends you.
+3. Go to **SMTP & API → API keys → Generate a new API key**. Copy it (it starts with `xkeysib-`).
+4. In Render, open your service → **Environment** and add:
+   - `BREVO_API_KEY` = the key from step 3
+   - `MAIL_FROM` = the sender email from step 2
+   - `MAIL_FROM_NAME` = `Home Game` (optional)
+5. Save; Render redeploys.
+
+Codes last 15 minutes, allow 5 tries, and a new one can be requested every 30 seconds. Without your own domain, emails sometimes land in spam, so tell friends to check there. Accounts made before email was turned on keep working without a code.
 
 ### Where accounts are kept
 
@@ -118,6 +133,15 @@ The key is never in your code, so it stays private even if your GitHub repositor
 ### Updating the site
 
 Edit or re-upload files in your GitHub repository. Render notices the change and redeploys automatically within a few minutes.
+
+### Stop the site from falling asleep
+
+On Render's free plan the site sleeps after 15 minutes with nobody on it, and the next visitor waits about a minute for it to wake. To keep it awake, have a free pinger visit it every 10 minutes:
+
+1. Sign up at https://cron-job.org (free).
+2. **Create cronjob** → URL `https://<your-site>.onrender.com/health`, schedule **every 10 minutes** → Create.
+
+One always-on site fits inside Render's 750 free hours a month.
 
 ## How the project is organised
 

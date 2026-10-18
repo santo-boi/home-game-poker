@@ -181,7 +181,7 @@ details.more[open] summary{ margin-bottom: 14px; }
 
 /* ---------- cards ---------- */
 .card{ width: var(--cw); height: calc(var(--cw) * 1.4); perspective: 700px; position: relative; flex: none; }
-.card .inner{ position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .55s cubic-bezier(.3,.7,.25,1); }
+.card .inner{ position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .4s cubic-bezier(.3,.7,.25,1); }
 .card.up .inner{ transform: rotateY(180deg); }
 .card .face, .card .back{ position: absolute; inset: 0; border-radius: calc(var(--cw) * .1); backface-visibility: hidden; -webkit-backface-visibility: hidden; box-shadow: 0 3px 10px rgba(0,0,0,.35); }
 .card .back{
@@ -198,7 +198,10 @@ details.more[open] summary{ margin-bottom: 14px; }
 .card .face .big{ position: absolute; right: 6%; bottom: 2%; font-size: calc(var(--cw) * .62); line-height: 1; opacity: .92; }
 .card.win .face{ box-shadow: 0 0 0 2px var(--brass), 0 0 22px rgba(212,162,70,.6); }
 .card.dim .face{ filter: brightness(.55); }
-.card.flying{ position: fixed; z-index: 50; pointer-events: none; }
+.card.flying{ position: fixed; z-index: 50; pointer-events: none; will-change: transform; }
+.flying-chip{ will-change: transform; }
+/* buttons react on touch with no 300ms wait, and no grey flash on phones */
+button, .btn, [role=tab], .seat, .empty-chair{ touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 /* the slow river: lift, peek, peek, turn */
 .card.squeeze .inner{ animation: squeeze 2.2s cubic-bezier(.4,.1,.3,1) forwards; }
 @keyframes squeeze{
@@ -673,3 +676,10 @@ html, body{ height: 100%; }
   .hr-net{ grid-row: 1 / 3; grid-column: 2; }
   .mc{ width: 24px; height: 33px; font-size: 11px; }
 }
+.auth-title{ font-family: var(--serif); font-weight: 400; font-size: 32px; margin: 0 0 6px; }
+.auth-intro{ margin: 0; font-size: 14px; } .auth-intro b{ color: var(--text); }
+.link-btn{ background: none; border: 0; color: var(--text-dim); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; padding: 2px; align-self: center; }
+.link-btn:hover{ color: var(--brass); }
+.ok-msg{ color: var(--good); font-size: 14px; min-height: 0; }
+.ok-msg:empty{ display: none; }
+.code-input.otp{ letter-spacing: .5em; }

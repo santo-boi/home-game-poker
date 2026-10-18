@@ -42,11 +42,31 @@ function pgStore(url){
         id BIGSERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, game_key TEXT NOT NULL, hand_no INT,
         played_at TIMESTAMPTZ DEFAULT now(), hole TEXT, board TEXT, board2 TEXT, hand_name TEXT, delta BIGINT, pot BIGINT, won BOOLEAN, folded BOOLEAN, players INT)`);
       await q(`CREATE INDEX IF NOT EXISTS hand_history_user_game ON hand_history (user_id, game_key, hand_no)`);
+      // accounts made before email codes existed count as confirmed; new ones are created unconfirmed
+      await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT true`);
+      await q(`CREATE TABLE IF NOT EXISTS email_codes (
+        email TEXT NOT NULL, purpose TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+        attempts INT DEFAULT 0, sent_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (email, purpose))`);
     },
-    async createUser(email, name, pass){
-      const r = await q(`INSERT INTO users (email, name, pass) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING RETURNING id, email, name`, [email, name, pass]);
+    async createUser(email, name, pass, verified = true){
+      const r = await q(`INSERT INTO users (email, name, pass, verified) VALUES ($1, $2, $3, $4) ON CONFLICT (email) DO NOTHING RETURNING id, email, name`, [email, name, pass, verified]);
       return r.rows[0] || null;
     },
+    async updateUnverified(id, name, pass){ await q(`UPDATE users SET name = $2, pass = $3 WHERE id = $1 AND verified = false`, [id, name, pass]); },
+    async setVerified(id){ await q(`UPDATE users SET verified = true WHERE id = $1`, [id]); },
+    async setPassword(id, pass){ await q(`UPDATE users SET pass = $2, verified = true WHERE id = $1`, [id, pass]); await q(`DELETE FROM sessions WHERE user_id = $1`, [id]); },
+    async saveCode(email, purpose, codeHash, expiresAt){
+      await q(`INSERT INTO email_codes (email, purpose, code_hash, expires_at, attempts, sent_at) VALUES ($1,$2,$3,$4,0,now())
+        ON CONFLICT (email, purpose) DO UPDATE SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0, sent_at = now()`,
+        [email, purpose, codeHash, new Date(expiresAt)]);
+    },
+    async getCode(email, purpose){
+      const r = await q(`SELECT code_hash, expires_at, attempts, sent_at FROM email_codes WHERE email = $1 AND purpose = $2`, [email, purpose]);
+      const x = r.rows[0];
+      return x ? { codeHash: x.code_hash, expiresAt: +new Date(x.expires_at), attempts: x.attempts, sentAt: +new Date(x.sent_at) } : null;
+    },
+    async bumpCode(email, purpose){ await q(`UPDATE email_codes SET attempts = attempts + 1 WHERE email = $1 AND purpose = $2`, [email, purpose]); },
+    async deleteCode(email, purpose){ await q(`DELETE FROM email_codes WHERE email = $1 AND purpose = $2`, [email, purpose]); },
     async findUserByEmail(email){ const r = await q(`SELECT * FROM users WHERE email = $1`, [email]); return r.rows[0] || null; },
     async createSession(userId){ const t = newToken(); await q(`INSERT INTO sessions (token, user_id) VALUES ($1, $2)`, [t, userId]); return t; },
     async userForSession(token){
@@ -84,7 +104,7 @@ function pgStore(url){
 
 // ---------- JSON file (local fallback) ----------
 function fileStore(file){
-  let db = { users: [], sessions: {}, games: [], hands: [], nextId: 1 };
+  let db = { users: [], sessions: {}, games: [], hands: [], codes: {}, nextId: 1 };
   try { db = { ...db, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch(e){}
   let timer = null;
   const save = () => { clearTimeout(timer); timer = setTimeout(() => fs.writeFile(file, JSON.stringify(db), () => {}), 300); };
@@ -92,12 +112,20 @@ function fileStore(file){
   return {
     kind: 'file',
     async init(){},
-    async createUser(email, name, pass){
+    async createUser(email, name, pass, verified = true){
       if(db.users.some(u => u.email === email)) return null;
-      const u = { id: db.nextId++, email, name, pass, createdAt: Date.now() };
+      const u = { id: db.nextId++, email, name, pass, verified, createdAt: Date.now() };
       db.users.push(u); save(); return pub(u);
     },
-    async findUserByEmail(email){ return db.users.find(u => u.email === email) || null; },
+    async findUserByEmail(email){ const u = db.users.find(u => u.email === email); return u ? { verified: true, ...u } : null; },
+    async updateUnverified(id, name, pass){ const u = db.users.find(x => x.id === id); if(u && u.verified === false){ u.name = name; u.pass = pass; save(); } },
+    async setVerified(id){ const u = db.users.find(x => x.id === id); if(u){ u.verified = true; save(); } },
+    async setPassword(id, pass){ const u = db.users.find(x => x.id === id); if(u){ u.pass = pass; u.verified = true; }
+      for(const [t, uid] of Object.entries(db.sessions)) if(uid === id) delete db.sessions[t]; save(); },
+    async saveCode(email, purpose, codeHash, expiresAt){ db.codes[email + '|' + purpose] = { codeHash, expiresAt, attempts: 0, sentAt: Date.now() }; save(); },
+    async getCode(email, purpose){ return db.codes[email + '|' + purpose] || null; },
+    async bumpCode(email, purpose){ const c = db.codes[email + '|' + purpose]; if(c){ c.attempts++; save(); } },
+    async deleteCode(email, purpose){ delete db.codes[email + '|' + purpose]; save(); },
     async createSession(userId){ const t = newToken(); db.sessions[t] = userId; save(); return t; },
     async userForSession(token){ return token && db.sessions[token] ? pub(db.users.find(u => u.id === db.sessions[token])) : null; },
     async deleteSession(token){ delete db.sessions[token]; save(); },
