@@ -78,7 +78,7 @@ io.on('connection', socket => {
   };
   const hostOnly = () => {
     const c = current();
-    if(c.t.adminId !== c.p.id) throw new Error('Only the host can do that.');
+    if(c.t.adminId !== c.p.id) throw new Error('Only the admin can do that.');
     return c;
   };
 
@@ -89,7 +89,7 @@ io.on('connection', socket => {
     const code = newCode();
     const table = new Table(code, s, broadcast);
     rooms.set(code, table);
-    const p = table.addPlayer({ name });
+    const p = table.addMember({ name });
     attach(socket, table, p);
     const chips = Math.floor(Number(startChips));
     if(chips > 0) table.give(p.id, chips);
@@ -104,10 +104,9 @@ io.on('connection', socket => {
     if(!table) throw new Error('No table has that code. Check it with the host.');
     name = cleanName(name);
     if(!name) throw new Error('Enter your name.');
-    if(table.seated().some(p => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Someone at the table already has that name.');
-    const p = table.addPlayer({ name });
+    if([...table.players.values()].some(p => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Someone in this game already has that name.');
+    const p = table.addMember({ name });
     attach(socket, table, p);
-    table.requestChips(p.id, table.settings.defaultBuyIn);   // the host sees a buy-in request straight away
     return { code: table.code, token: p.token };
   });
 
@@ -115,7 +114,7 @@ io.on('connection', socket => {
     const table = rooms.get(cleanCode(code));
     if(!table) throw new Error('No table has that code. Check it with the host.');
     const host = table.players.get(table.adminId);
-    return { code: table.code, settings: table.settings, seatsTaken: table.seated().length, host: host ? host.name : null };
+    return { code: table.code, settings: table.settings, seatsTaken: table.seated().length, members: table.players.size, host: host ? host.name : null };
   });
 
   handle(socket, 'resume', ({ code, token }) => {
@@ -129,6 +128,9 @@ io.on('connection', socket => {
 
   handle(socket, 'action', a => { const { t, p } = current(); t.act(p.id, { type: a.type, amount: a.amount }); });
   handle(socket, 'requestChips', ({ amount }) => { const { t, p } = current(); t.requestChips(p.id, amount); });
+  handle(socket, 'sit', ({ seat, amount }) => { const { t, p } = current(); t.sit(p.id, seat, amount); });
+  handle(socket, 'stand', () => { const { t, p } = current(); t.standUp(p.id); });
+  handle(socket, 'topUp', ({ amount }) => { const { t, p } = current(); t.topUp(p.id, amount); });
   handle(socket, 'cancelRequest', () => { const { t, p } = current(); t.cancelRequest(p.id); });
   handle(socket, 'sitOut', ({ value }) => { const { t, p } = current(); t.setSittingOut(p.id, value); });
   handle(socket, 'chat', ({ text }) => {
@@ -162,11 +164,16 @@ io.on('connection', socket => {
       const target = t.players.get(playerId);
       if(!target) throw new Error('That player has already left.');
       if(target.id === t.adminId) throw new Error("You can't remove yourself.");
+      if(target.isBot && target.seat >= 0){ t.removePlayer(target.id, 'was removed'); return; }
       t.removePlayer(target.id, target.isBot ? 'was removed' : 'was removed by the host');
+    } else if(cmd === 'standUp'){
+      const target = t.players.get(playerId);
+      if(!target) throw new Error('That player has already left.');
+      t.standUp(target.id);
     } else if(cmd === 'makeHost'){
       const target = t.players.get(playerId);
       if(!target || target.isBot) throw new Error('Choose a person at the table.');
-      t.adminId = target.id; t.addLog(`${target.name} is now the host.`);
+      t.adminId = target.id; t.addLog(`${target.name} is now the admin.`);
     } else throw new Error('Unknown host command.');
   });
 

@@ -17,13 +17,14 @@ const t = new Table('TEST1', validateSettings({ sb: 10, bb: 20, defaultBuyIn: 20
 const origGive = t.give.bind(t), origTake = t.take.bind(t), origRemove = t.removePlayer.bind(t);
 t.give = (id, a, via) => { origGive(id, a, via); totalIn += Math.floor(a); };
 t.take = (id, a) => { origTake(id, a); totalOut += Math.floor(a); };
-t.removePlayer = (id, reason) => { const p = t.players.get(id); const before = t.players.size; origRemove(id, reason); if(p && t.players.size < before) totalOut += p.chips + p.pendingChips; };
+t.removePlayer = (id, reason) => { const p = t.players.get(id); const before = t.players.size; origRemove(id, reason); if(p && t.players.size < before) totalOut += p.wallet + p.chips + p.pendingChips; };
 
 const humans = [];
 for(const n of ['Santo', 'Arun', 'Divya', 'Kiran']){
-  const p = t.addPlayer({ name: n });
+  const p = t.addMember({ name: n });
   t.requestChips(p.id, 1500);
-  t.approve(t.requests.find(r => r.playerId === p.id).id, 400 + Math.floor(Math.random() * 3600));
+  t.approve(t.requests.find(r => r.playerId === p.id).id, 4000 + Math.floor(Math.random() * 6000));
+  t.sit(p.id, null, 400 + Math.floor(Math.random() * 3000));
   humans.push(p);
 }
 t.addBot(); t.addBot(); t.addBot();
@@ -31,7 +32,7 @@ t.start();
 
 function check(where){
   const paid = t.hand && t.hand.result;
-  const inPlay = t.seated().reduce((a, p) => a + p.chips + p.pendingChips + (p.inHand && !paid ? p.committed : 0), 0);
+  const inPlay = [...t.players.values()].reduce((a, p) => a + p.wallet + p.chips + p.pendingChips + (p.inHand && !paid ? p.committed : 0), 0);
   if(inPlay !== totalIn - totalOut) problems.push(`${where}: chips ${inPlay} != ${totalIn - totalOut}`);
   for(const p of t.seated()) if(p.chips < 0) problems.push(`${where}: negative chips for ${p.name}`);
   if(t.seated().length > t.settings.maxPlayers && t.settings.maxPlayers >= t.seated().length) problems.push('too many players');
@@ -43,6 +44,7 @@ function nextPhase(){
   const ph = PHASES[phase % PHASES.length];
   t.updateSettings({ sb: 10, bb: 20, ante: 0, bombEvery: 0, runItTwice: false, muckLosers: false, timerOn: true, blindUpMinutes: 0, ...ph.s });
   if(ph.name.startsWith('10 players')) while(t.seated().length < 10) t.addBot();
+  else while(t.seated().length > 7){ const b = t.seated().find(p => p.isBot && !p.inHand); if(!b) break; t.removePlayer(b.id, 'was removed'); }
 }
 nextPhase();
 
@@ -80,11 +82,20 @@ const tick = setInterval(() => {
       }
     }
     // the host hands out chips mid-hand sometimes: they must wait until the hand ends
-    if(Math.random() < 0.002){ const p = humans.find(x => t.players.has(x.id)); if(p) t.give(p.id, 100); }
+    if(Math.random() < 0.002){ const p = humans.find(x => t.players.has(x.id) && x.seat >= 0); if(p){ t.give(p.id, 300); t.topUp(p.id, 300); } }
+    if(Math.random() < 0.001){ const p = humans.find(x => t.players.has(x.id) && x.seat >= 0 && x.inHand); if(p) t.standUp(p.id); }
   } else {
-    for(const p of humans) if(t.players.has(p.id) && p.chips === 0){ t.requestChips(p.id, 2000); t.approve(t.requests.find(r => r.playerId === p.id).id, 400 + Math.floor(Math.random() * 3000)); }
-    const rich = humans.find(p => t.players.has(p.id) && p.chips > 5000);
-    if(rich && Math.random() < 0.3) t.take(rich.id, 1000);
+    for(const p of humans){
+      if(!t.players.has(p.id)) continue;
+      if(p.seat >= 0 && p.chips === 0){
+        if(p.wallet < 400){ t.requestChips(p.id, 2000); t.approve(t.requests.find(r => r.playerId === p.id).id, 400 + Math.floor(Math.random() * 3000)); }
+        t.topUp(p.id, Math.min(p.wallet, 400 + Math.floor(Math.random() * 2000)));
+      }
+      // sometimes stand up and sit back down, or move wallet chips around
+      if(p.seat >= 0 && Math.random() < 0.01) t.standUp(p.id);
+      if(p.seat < 0 && t.seated().length < t.settings.maxPlayers){ if(p.wallet < 400) t.give(p.id, 3000); t.sit(p.id, null, Math.min(p.wallet, 400 + Math.floor(Math.random() * 2000))); }
+      if(p.wallet > 5000 && Math.random() < 0.3) t.take(p.id, 1000);
+    }
     if(t.seated().filter(p => p.isBot).length < 2) t.addBot();
   }
   if(counted >= HANDS) finish();

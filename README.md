@@ -5,7 +5,9 @@ Private No-Limit Hold'em tables for you and your friends. One person hosts a tab
 ## What it does
 
 - **Rooms for up to 10 players:** host a table, share the invite link, friends join with just their name.
-- **The host controls the chips:** players ask for chips and the host approves, changes or declines each request. The host can also give or take back chips at any time; chips given during a hand arrive when it ends.
+- **Lobby and wallets, like Chips of Fury:** everyone lands in a lobby showing the game, the settings and a balances list. Only the admin puts chips into wallets (players can ask with one tap). On the Table page you watch until you press Join Table and buy in from your wallet; standing up returns your stack to the wallet.
+- **Admin tools:** give or take back chips, approve requests, stand someone up, remove them, or pass the admin role to someone else.
+- **For new players:** the ? button shows every hand from royal flush to high card with examples, plus how a hand works.
 - **Table settings (host only):** maximum players, small and big blind, ante, blinds that double on a schedule, turn timer on or off, seconds per turn, time bank, standard buy-in, run it twice, rabbit hunting, muck losing hands, bomb pots (every N hands, or on demand), and automatic or manual dealing. Settings can be saved as presets. Changes made during a hand apply from the next hand.
 - **Host controls:** start, pause, deal the next hand, call a bomb pot, skip a slow player's turn (when the timer is off), add computer players, remove a player, hand the host role to someone else.
 - **Real rules:** blinds and button rotation (including heads-up rules), antes, minimum raises, short all-ins, side pots, split pots with odd chips to the left of the button.
