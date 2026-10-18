@@ -63,7 +63,7 @@ function noise(d = .05, v = .05, hp = 2000){
 // iPhones only show the pressed-in look on buttons when the page listens for touches
 document.addEventListener('touchstart', () => {}, { passive: true });
 const SFX = {
-  deal: () => noise(.045, .06, 2600), flip: () => noise(.08, .05, 1200), chip: () => { tone(2400, .05, 'triangle', .04); tone(3100, .04, 'triangle', .03, .04); },
+  deal: () => noise(.045, .06, 2600), chat: () => { tone(880, .06, 'sine', .035); tone(1320, .08, 'sine', .03, .06); }, flip: () => noise(.08, .05, 1200), chip: () => { tone(2400, .05, 'triangle', .04); tone(3100, .04, 'triangle', .03, .04); },
   turn: () => { tone(660, .15, 'sine', .06); tone(990, .2, 'sine', .05, .12); }, tick: () => tone(1400, .03, 'square', .02),
   win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, .25, 'triangle', .05, i * .09)), thud: () => tone(90, .25, 'sine', .12),
 };
@@ -499,6 +499,7 @@ function buildTable(){
       <div class="bbar-tools">
         <button class="tool-btn ${ui.bbMode ? 'on' : ''}" id="bbBtn" aria-pressed="${!!ui.bbMode}"><span class="tool-ic">BB</span><span>x BB</span></button>
         <button class="tool-btn" id="oddsBtn"><span class="tool-ic">${ICON2.chart}</span><span>odds</span></button>
+        <button class="tool-btn" id="reactBtn" aria-label="Send a reaction"><span class="tool-ic emo-ic">😊</span><span>react</span></button>
         <button class="tool-btn" id="chatBtn"><span class="tool-ic">${ICON2.chat}</span><span>chat/log</span><span class="badge hidden" id="chatBadge"></span></button>
       </div>
     </footer>
@@ -513,6 +514,7 @@ function buildTable(){
   $('#bbBtn').onclick = () => { ui.bbMode = !ui.bbMode; $('#bbBtn').classList.toggle('on', ui.bbMode); $('#bbBtn').setAttribute('aria-pressed', ui.bbMode); update(); };
   $('#chatBtn').onclick = () => togglePanel(ui.tab === 'odds' ? 'chat' : ui.tab);
   $('#oddsBtn').onclick = () => togglePanel('odds');
+  $('#reactBtn').onclick = e => reactMenu(e.currentTarget);
   $('#sideClose').onclick = () => togglePanel(null);
   $('#reqBtn').onclick = () => goLobby();
   window.onresize = () => S && ui.view === 'table' && layout();
@@ -1080,15 +1082,80 @@ function renderLog(body){
   if(body.dataset.key === key) return; body.dataset.key = key;
   body.innerHTML = S.log.map(l => `<div class="log-item ${l.kind}">${esc(l.text)}</div>`).join('') || '<p class="log-item">Nothing yet.</p>';
 }
+const EMOJIS = ['😂','🤣','😭','😎','🤔','😮','😤','😡','🥲','😅','🙏','👍','👏','🔥','💀','🤡','🐟','🦈','🃏','♠️','💰','💸','🎉','🍀','🚀','🤯','😴','🙈','❤️','👀'];
+const QUICK = ['👍','😂','🔥','😭','😮','🙏'];
+const emojiOnly = t => /^[\p{Extended_Pictographic}\uFE0F\u200D\s]+$/u.test(t) && [...t.replace(/\s|\uFE0F|\u200D/g, '')].length <= 3;
+async function sendChat(text){
+  text = String(text || '').trim(); if(!text) return false;
+  const r = await emit('chat', { text });
+  if(!r.ok){ toast(r.error, true); return false; }
+  return true;
+}
 function renderChat(body){
-  const key = 'chat' + S.chat.length + (S.chat.at(-1) ? S.chat.at(-1).t : '');
+  if(!$('#chatForm', body)){
+    body.dataset.key = '';
+    body.innerHTML = `<div class="chat-list" id="chatList"></div>
+      <div class="chat-dock">
+        <div class="quick-row">${QUICK.map(e => `<button type="button" class="quick-emo" data-emo="${e}" aria-label="Send ${e}">${e}</button>`).join('')}</div>
+        <div class="emoji-grid ${ui.emojiOpen ? '' : 'hidden'}" id="emojiGrid">${EMOJIS.map(e => `<button type="button" data-ins="${e}">${e}</button>`).join('')}</div>
+        <form class="chat-form" id="chatForm"><button type="button" class="emo-btn ${ui.emojiOpen ? 'on' : ''}" id="emoBtn" aria-label="Emojis">😊</button><input id="chatIn" maxlength="200" placeholder="Message the table" autocomplete="off"><button class="btn btn-sm">Send</button></form>
+      </div>`;
+    $('#chatIn').value = ui.chatDraft || '';
+    $('#chatIn').oninput = e => { ui.chatDraft = e.target.value; };
+    $('#emoBtn').onclick = () => { ui.emojiOpen = !ui.emojiOpen; $('#emojiGrid').classList.toggle('hidden', !ui.emojiOpen); $('#emoBtn').classList.toggle('on', ui.emojiOpen); };
+    $$('[data-ins]', body).forEach(b => b.onclick = () => {
+      const i = $('#chatIn'), at = i.selectionStart ?? i.value.length, end = i.selectionEnd ?? at;
+      if(i.value.length + b.dataset.ins.length > 200) return;
+      i.value = i.value.slice(0, at) + b.dataset.ins + i.value.slice(end); ui.chatDraft = i.value;
+      const pos = at + b.dataset.ins.length; if(!matchMedia('(pointer: coarse)').matches){ i.focus(); i.setSelectionRange(pos, pos); }
+    });
+    $$('[data-emo]', body).forEach(b => b.onclick = () => sendChat(b.dataset.emo));
+    $('#chatForm').onsubmit = async e => {
+      e.preventDefault(); const t = $('#chatIn').value.trim(); if(!t) return;
+      $('#chatIn').value = ''; ui.chatDraft = '';
+      if(!(await sendChat(t))){ $('#chatIn').value = t; ui.chatDraft = t; }
+    };
+  }
+  const key = 'chat' + (S.chat.at(-1) ? S.chat.at(-1).id + '-' + S.chat.length : '0');
   if(body.dataset.key === key) return; body.dataset.key = key;
-  const draft = $('#chatIn') ? $('#chatIn').value : '';
-  body.innerHTML = `<div class="chat-list">${S.chat.map(m => `<div class="chat-msg"><b style="color:${AV_COLORS[Math.max(0, m.seat) % AV_COLORS.length]}">${esc(m.name)}</b>${esc(m.text)}</div>`).join('') || '<p class="log-item">Say hello to the table.</p>'}</div>
-    <form class="chat-form" id="chatForm"><input id="chatIn" maxlength="200" placeholder="Message the table" autocomplete="off"><button class="btn btn-sm">Send</button></form>`;
-  $('#chatIn').value = draft;
-  body.scrollTop = body.scrollHeight;
-  $('#chatForm').onsubmit = async e => { e.preventDefault(); const t = $('#chatIn').value.trim(); if(!t) return; $('#chatIn').value = ''; await emit('chat', { text: t }); };
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+  $('#chatList').innerHTML = S.chat.map(m => `<div class="chat-msg ${emojiOnly(m.text) ? 'emo' : ''}"><b style="color:${AV_COLORS[Math.max(0, m.seat) % AV_COLORS.length]}">${esc(m.name)}</b><span>${esc(m.text)}</span></div>`).join('') || '<p class="log-item">Say hello to the table.</p>';
+  if(nearBottom || !body._seen){ body.scrollTop = body.scrollHeight; body._seen = true; }
+}
+// A message pops up above the sender's seat on the table for a few seconds.
+function chatBubble(m){
+  if(ui.view !== 'table' || !S || !$('#table')) return;
+  const seat = S.seats.findIndex(p => p && p.id === m.pid);
+  if(seat < 0) return;                                   // spectators only show in the chat list
+  const el = $('#seat' + seat); if(!el) return;
+  const old = $(`.chat-bubble[data-seat="${seat}"]`); if(old) old.remove();
+  const b = document.createElement('div');
+  const below = el.offsetTop - el.offsetHeight / 2 < 70;  // seats at the very top get the bubble underneath
+  b.className = 'chat-bubble' + (below ? ' below' : '') + (emojiOnly(m.text) ? ' emo' : '');
+  b.dataset.seat = seat;
+  b.textContent = m.text;
+  b.style.top = (below ? el.offsetTop + el.offsetHeight / 2 + 4 : el.offsetTop - el.offsetHeight / 2 - 4) + 'px';
+  $('#table').appendChild(b);
+  // keep the whole bubble on screen; the little tail still points at the player
+  const tr = $('#table').getBoundingClientRect(), w = b.offsetWidth, x = el.offsetLeft;
+  const cx = Math.max(8 - tr.left + w / 2, Math.min(innerWidth - tr.left - 8 - w / 2, x));
+  b.style.left = cx + 'px';
+  b.style.setProperty('--tail', Math.max(-w / 2 + 14, Math.min(w / 2 - 14, x - cx)) + 'px');
+  if(m.pid !== S.you) SFX.chat && SFX.chat();
+  const ms = Math.min(7000, 3200 + m.text.length * 45);
+  setTimeout(() => { b.classList.add('bye'); setTimeout(() => b.remove(), 300); }, ms);
+}
+// Quick reactions from the bottom bar, without opening the chat.
+function reactMenu(anchor){
+  const old = $('.react-pop'); if(old){ old.remove(); return; }
+  const m = document.createElement('div'); m.className = 'react-pop';
+  m.innerHTML = EMOJIS.slice(0, 18).map(e => `<button type="button" data-r="${e}">${e}</button>`).join('');
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, r.left + r.width / 2 - m.offsetWidth / 2)) + 'px';
+  m.style.top = (r.top - m.offsetHeight - 10) + 'px';
+  $$('[data-r]', m).forEach(b => b.onclick = () => { sendChat(b.dataset.r); m.remove(); });
+  setTimeout(() => document.addEventListener('pointerdown', function off(e){ if(!m.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)){ m.remove(); document.removeEventListener('pointerdown', off); } }), 0);
 }
 /* ================= dialogs ================= */
 function confirmDialog(title, text, ok, fn, danger = true){
@@ -1431,9 +1498,13 @@ socket.on('state', st => {
     landing('join'); toast(wasWaiting ? "The admin didn't let you in." : 'The admin removed you from the game.', true); return;
   }
   if(ui.view === 'waiting'){ ui.view = 'lobby'; ui.lobbyKey = ''; toast("You're in!"); }
-  const chatGrew = S && S.chat && st.chat.length > S.chat.length && !(ui.panelOpen && ui.tab === 'chat' && ui.view === 'table');
+  const lastId = st.chat.length ? (st.chat.at(-1).id || 0) : 0;
+  const fresh = ui.chatSeen == null || ui.chatRoom !== st.code ? [] : st.chat.filter(m => (m.id || 0) > ui.chatSeen);
+  ui.chatSeen = Math.max(ui.chatRoom === st.code ? ui.chatSeen || 0 : 0, lastId); ui.chatRoom = st.code;
+  const reading = ui.panelOpen && ui.tab === 'chat' && ui.view === 'table';
   P = S; S = st; receivedAt = performance.now();
-  if(chatGrew) ui.unread += st.chat.length - P.chat.length;
+  if(!reading) ui.unread += fresh.filter(m => m.pid !== S.you).length;
+  if(fresh.length && ui.view === 'table') queueMicrotask(() => fresh.forEach(chatBubble));
   if(S.isAdmin && P && P.requests && S.requests.length > P.requests.length){ const r = S.requests.at(-1); toast(`${r.name} is asking for ${fmt(r.amount)} chips`); SFX.turn(); }
   if(S.isAdmin && P && P.joinRequests && S.joinRequests.length > P.joinRequests.length){ toast(`${S.joinRequests.at(-1).name} wants to join`); SFX.turn(); }
   if(ui.view === 'table') update();

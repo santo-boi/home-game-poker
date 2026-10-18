@@ -311,7 +311,11 @@ io.on('connection', socket => {
     const { t, p } = current();
     if(!p.approved) throw new Error('The admin has not let you in yet.');
     text = String(text || '').trim().slice(0, 200);
-    if(text) t.chat.push({ t: Date.now(), name: p.name, seat: p.seat, text });
+    if(!text) return;
+    if(Date.now() - (p.lastChat || 0) < 250) throw new Error('Slow down a little.');
+    p.lastChat = Date.now();
+    t.chatSeq = (t.chatSeq || 0) + 1;
+    t.chat.push({ id: t.chatSeq, t: Date.now(), pid: p.id, name: p.name, seat: p.seat, text });
     if(t.chat.length > 100) t.chat.shift();
   });
   handle(socket, 'leave', () => {

@@ -683,3 +683,42 @@ html, body{ height: 100%; }
 .ok-msg{ color: var(--good); font-size: 14px; min-height: 0; }
 .ok-msg:empty{ display: none; }
 .code-input.otp{ letter-spacing: .5em; }
+
+/* ---------- chat: emojis and speech bubbles on the table ---------- */
+.chat-msg{ overflow-wrap: anywhere; }
+.chat-msg.emo span{ font-size: 26px; line-height: 1.1; vertical-align: middle; }
+.chat-dock{ position: sticky; bottom: 0; padding-top: 8px; background: linear-gradient(transparent, var(--room-2, var(--room)) 22%); }
+.chat-dock .chat-form{ position: static; padding-top: 6px; background: none; }
+.quick-row{ display: flex; gap: 6px; justify-content: space-between; }
+.quick-emo, .emoji-grid button, .react-pop button{ font: inherit; font-size: 20px; line-height: 1; border: 1px solid var(--line); background: rgba(255,255,255,.05); border-radius: 12px; cursor: pointer; color: inherit;
+  box-shadow: 0 3px 0 var(--edge); transition: transform .06s, box-shadow .06s, background .15s; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.quick-emo{ flex: 1; height: 38px; }
+.quick-emo:hover, .emoji-grid button:hover, .react-pop button:hover{ background: rgba(255,255,255,.1); }
+.quick-emo:active, .emoji-grid button:active, .react-pop button:active{ transform: translateY(2px); box-shadow: 0 1px 0 var(--edge); }
+.emoji-grid{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: rgba(0,0,0,.25); }
+.emoji-grid.hidden{ display: none; }
+.emoji-grid button{ height: 38px; }
+.emo-btn{ flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255,255,255,.05); font-size: 19px; cursor: pointer; padding: 0;
+  box-shadow: 0 3px 0 var(--edge); transition: transform .06s, box-shadow .06s; }
+.emo-btn:active{ transform: translateY(2px); box-shadow: 0 1px 0 var(--edge); }
+.emo-btn.on{ border-color: var(--brass); background: rgba(212,162,70,.15); }
+.tool-btn .tool-ic.emo-ic{ font-size: 17px; font-weight: 400; }
+
+.react-pop{ position: fixed; z-index: 60; display: grid; grid-template-columns: repeat(6, 44px); gap: 6px; padding: 10px; border-radius: 16px;
+  background: var(--room-2, #13223b); border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0,0,0,.5); animation: popIn .16s ease-out; }
+.react-pop button{ height: 44px; font-size: 22px; }
+@keyframes popIn{ from{ opacity: 0; transform: translateY(6px) scale(.96); } to{ opacity: 1; transform: none; } }
+
+.chat-bubble{ position: absolute; left: 0; z-index: 20; width: max-content; max-width: min(220px, 60vw); padding: 7px 12px; border-radius: 16px; background: var(--ivory); color: var(--ink);
+  font-size: 14px; font-weight: 600; line-height: 1.3; text-align: center; overflow-wrap: anywhere; pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.4); transform-origin: 50% 100%;
+  transform: translate(-50%, -100%); animation: bubbleIn .28s cubic-bezier(.2,1.4,.4,1) both; }
+.chat-bubble::after{ content: ''; position: absolute; left: calc(50% + var(--tail, 0px)); bottom: -6px; width: 12px; height: 12px; background: var(--ivory); transform: translateX(-50%) rotate(45deg); border-radius: 2px; }
+.chat-bubble.below{ transform: translate(-50%, 0); transform-origin: 50% 0; animation-name: bubbleInBelow; }
+.chat-bubble.below::after{ bottom: auto; top: -6px; }
+.chat-bubble.emo{ font-size: 30px; padding: 4px 10px; line-height: 1.15; }
+.chat-bubble.bye{ opacity: 0; transition: opacity .3s; }
+@keyframes bubbleIn{ from{ opacity: 0; transform: translate(-50%, -100%) translateY(8px) scale(.6); } to{ opacity: 1; transform: translate(-50%, -100%); } }
+@keyframes bubbleInBelow{ from{ opacity: 0; transform: translate(-50%, 0) translateY(-8px) scale(.6); } to{ opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce){ .chat-bubble, .react-pop{ animation: none; } }
+@media (max-width: 760px){ .chat-bubble{ font-size: 13px; max-width: 56vw; } .chat-bubble.emo{ font-size: 26px; } }
