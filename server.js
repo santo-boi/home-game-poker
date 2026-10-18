@@ -105,9 +105,9 @@ io.on('connection', socket => {
     name = cleanName(name);
     if(!name) throw new Error('Enter your name.');
     if([...table.players.values()].some(p => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Someone in this game already has that name.');
-    const p = table.addMember({ name });
+    const p = table.addMember({ name, approved: false });   // waits for the admin
     attach(socket, table, p);
-    return { code: table.code, token: p.token };
+    return { code: table.code, token: p.token, pending: true };
   });
 
   handle(socket, 'peekRoom', ({ code }) => {
@@ -135,6 +135,7 @@ io.on('connection', socket => {
   handle(socket, 'sitOut', ({ value }) => { const { t, p } = current(); t.setSittingOut(p.id, value); });
   handle(socket, 'chat', ({ text }) => {
     const { t, p } = current();
+    if(!p.approved) throw new Error('The admin has not let you in yet.');
     text = String(text || '').trim().slice(0, 200);
     if(text) t.chat.push({ t: Date.now(), name: p.name, seat: p.seat, text });
     if(t.chat.length > 100) t.chat.shift();
@@ -154,6 +155,8 @@ io.on('connection', socket => {
     else if(cmd === 'settings') t.updateSettings(settings || {});
     else if(cmd === 'addBot') t.addBot();
     else if(cmd === 'deal') t.dealNext();
+    else if(cmd === 'admit') t.admit(playerId);
+    else if(cmd === 'reject') t.reject(playerId);
     else if(cmd === 'skip') t.skipTurn();
     else if(cmd === 'bomb') t.queueBomb();
     else if(cmd === 'give') t.give(playerId, amount);

@@ -57,7 +57,7 @@ class Table {
   addLog(text, kind = 'info'){ this.log.unshift({ t: Date.now(), text, kind }); if(this.log.length > 120) this.log.pop(); }
   changed(){ this.lastActivity = Date.now(); this.onChange(this); }
   seated(){ return this.seats.filter(Boolean); }
-  humans(){ return [...this.players.values()].filter(p => !p.isBot); }
+  humans(){ return [...this.players.values()].filter(p => !p.isBot && p.approved); }
   inHand(){ return this.hand ? this.hand.order.map(s => this.seats[s]).filter(p => p && p.inHand) : []; }
   live(){ return this.inHand().filter(p => !p.folded); }
   canAct(){ return this.live().filter(p => !p.allIn); }
@@ -76,25 +76,39 @@ class Table {
   // ---------- people ----------
   // Everyone in the room is a member. Members sit at the table with chips bought in from
   // their wallet, which only the admin can fill.
-  addMember({ name, isBot = false, bot = null }){
+  addMember({ name, isBot = false, bot = null, approved = true }){
     if(this.players.size >= 40) throw new Error('This game is full.');
     const id = crypto.randomUUID();
     const p = {
       id, token: crypto.randomBytes(16).toString('hex'), name, isBot, bot,
       wallet: 0, chips: 0, buyInTotal: 0, pendingChips: 0, seat: -1, connected: true, sittingOut: false,
       leaving: false, standing: false, inHand: false, folded: false, allIn: false, hole: [], bet: 0, committed: 0,
-      lastAction: null, shown: false, bank: this.settings.timeBank, handsPlayed: 0, joinedAt: Date.now()
+      lastAction: null, shown: false, bank: this.settings.timeBank, handsPlayed: 0, joinedAt: Date.now(), approved
     };
     this.players.set(id, p);
-    if(!this.adminId && !isBot) this.adminId = id;
-    if(!isBot) this.addLog(`${name} joined the game.`, 'join');
+    if(!this.adminId && !isBot && approved) this.adminId = id;
+    if(!isBot) this.addLog(approved ? `${name} joined the game.` : `${name} is asking to join.`, 'join');
     return p;
+  }
+  // Everyone who joins with the code waits until the admin lets them in.
+  admit(id){
+    const p = this.players.get(id);
+    if(!p || p.approved) throw new Error('That request is no longer open.');
+    p.approved = true; p.joinedAt = Date.now();
+    this.addLog(`${p.name} joined the game.`, 'join');
+  }
+  reject(id){
+    const p = this.players.get(id);
+    if(!p || p.approved) return;
+    this.players.delete(id);
+    this.addLog(`The admin declined ${p.name}'s request to join.`);
   }
 
   // Take a seat with chips from the wallet.
   sit(id, seat, amount){
     const p = this.players.get(id);
     if(!p) throw new Error('You are not in this game.');
+    if(!p.approved) throw new Error('The admin has not let you in yet.');
     if(p.seat >= 0) throw new Error('You already have a seat.');
     if(this.seated().length >= this.settings.maxPlayers) throw new Error(`The table is full (${this.settings.maxPlayers} seats).`);
     seat = seat == null || seat < 0 ? SEAT_ORDER.find(i => !this.seats[i]) : Math.floor(Number(seat));
@@ -133,6 +147,7 @@ class Table {
     const p = this.players.get(id);
     if(!p) return;
     this.requests = this.requests.filter(r => r.playerId !== id);
+    if(!p.approved){ this.players.delete(id); return; }
     p.leaving = true;
     if(p.seat >= 0){
       this.standUp(id);
@@ -153,6 +168,7 @@ class Table {
   // ---------- chips: only the admin fills wallets ----------
   requestChips(id, amount){
     const p = this.players.get(id);
+    if(!p || !p.approved) throw new Error('The admin has not let you in yet.');
     amount = Math.floor(Number(amount));
     if(!(amount > 0) || amount > 1e9) throw new Error('Ask for a positive number of chips.');
     this.requests = this.requests.filter(r => r.playerId !== id);
@@ -219,12 +235,12 @@ class Table {
   start(){
     if(this.status === 'playing') return;
     if(!this.levelStartedAt) this.levelStartedAt = Date.now();
-    this.status = 'playing'; this.addLog('The host started the game.');
+    this.status = 'playing'; this.addLog('The admin started the game.');
     this.maybeStart(true);
   }
   pause(){ if(this.status === 'playing'){ this.status = 'paused'; this.addLog(this.hand ? 'The game will pause after this hand.' : 'The game is paused.'); } }
   dealNext(){ if(this.status !== 'playing') this.start(); else this.maybeStart(true); }
-  queueBomb(){ this.bombNext = true; this.addLog('The host called a bomb pot for the next hand.', 'bet'); }
+  queueBomb(){ this.bombNext = true; this.addLog('The admin called a bomb pot for the next hand.', 'bet'); }
 
   maybeStart(force = false){
     if(this.status !== 'playing' || this.hand || this.startPending) return;
@@ -363,7 +379,7 @@ class Table {
     const h = this.hand;
     if(!h || h.actingSeat < 0) throw new Error('Nobody is deciding right now.');
     const p = this.seats[h.actingSeat];
-    this.addLog(`The host skipped ${p.name}'s turn.`);
+    this.addLog(`The admin skipped ${p.name}'s turn.`);
     this.act(p.id, { type: h.currentBet - p.bet > 0 ? 'fold' : 'check' }, true);
   }
 
@@ -579,7 +595,7 @@ class Table {
       }
       this.hand = null;
       if(this.status === 'paused') this.addLog('The game is paused.');
-      else if(!this.settings.autoDeal) this.addLog('Waiting for the host to deal the next hand.');
+      else if(!this.settings.autoDeal) this.addLog('Waiting for the admin to deal the next hand.');
       this.maybeStart();
       this.changed();
     });
@@ -608,6 +624,7 @@ class Table {
   viewFor(viewerId){
     const h = this.hand;
     const me = this.players.get(viewerId);
+    if(me && !me.approved) return { code: this.code, you: viewerId, pending: true, adminName: (this.players.get(this.adminId) || {}).name || null, members: [] };
     const isAdmin = viewerId === this.adminId;
     const showdown = h && h.result && !h.result.uncontested;
     const winSeats = new Set(h && h.result ? h.result.winners.map(w => w.seat) : []);
@@ -626,7 +643,7 @@ class Table {
         bank: Math.round(p.bank), isAdmin: p.id === this.adminId, standing: p.standing
       };
     });
-    const members = [...this.players.values()].sort((a, b) => a.joinedAt - b.joinedAt).map(p => ({
+    const members = [...this.players.values()].filter(p => p.approved).sort((a, b) => a.joinedAt - b.joinedAt).map(p => ({
       id: p.id, name: p.name, isBot: p.isBot, isAdmin: p.id === this.adminId, connected: p.connected,
       seat: p.seat, wallet: p.wallet, stack: p.seat >= 0 ? p.chips + p.pendingChips + (p.inHand && !(h && h.result) ? p.committed : 0) : 0,
       given: p.buyInTotal, handsPlayed: p.handsPlayed,
@@ -640,6 +657,7 @@ class Table {
       settings: s, pendingSettings: this.pending, status: this.status, seats, maxSeats: MAX_SEATS,
       level: this.level, nextLevelMs: s.blindUpMinutes > 0 && this.levelStartedAt ? Math.max(0, this.levelStartedAt + s.blindUpMinutes * 60000 - Date.now()) : null,
       bombNext: this.bombNext || (s.bombEvery > 0 && (this.handCount + 1) % s.bombEvery === 0),
+      joinRequests: isAdmin ? [...this.players.values()].filter(p => !p.approved).map(p => ({ id: p.id, name: p.name })) : [],
       requests: isAdmin ? this.requests.map(r => ({ id: r.id, playerId: r.playerId, amount: r.amount, name: (this.players.get(r.playerId) || {}).name })) : [],
       myRequest: (this.requests.find(r => r.playerId === viewerId) || {}).amount || 0,
       hand: h ? {

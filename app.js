@@ -220,7 +220,8 @@ function landing(mode = 'join', code = ''){
     const r = await emit('joinRoom', { code: codeIn.value, name });
     if(!r.ok) return $('#jErr').textContent = r.error;
     saveSession({ code: r.code, token: r.token }); history.replaceState(null, '', `/?room=${r.code}`);
-    ui.view = 'lobby'; ui.lobbyKey = ''; try { sessionStorage.setItem('hgView', 'lobby'); } catch(e){}
+    try { sessionStorage.setItem('hgView', 'lobby'); } catch(e){}
+    ui.view = 'waiting'; ui.lobbyKey = '';
   };
   $('#createForm').onsubmit = async e => {
     e.preventDefault();
@@ -310,7 +311,7 @@ function buildTable(){
       <button class="round-btn" id="backBtn" aria-label="Back to the lobby">${ICON2.back}</button>
       <div class="tbar-title"><span class="code" id="roomCode"></span><span class="status-line" id="statusLine"></span></div>
       <div class="spacer"></div>
-      <button class="btn btn-sm hidden" id="reqBtn">Chip requests <span class="badge" id="reqCount">0</span></button>
+      <button class="btn btn-sm hidden" id="reqBtn">Requests <span class="badge" id="reqCount">0</span></button>
       <button class="round-btn" id="menuBtn" aria-label="Table menu">${ICON2.dots}</button>
     </header>
     <section class="stage" id="stage">
@@ -417,8 +418,9 @@ function update(){
   $('.felt-mark').classList.toggle('quiet', !!h);
   $('#table').classList.toggle('no-hand', !h);
   renderStatus();
-  $('#reqBtn').classList.toggle('hidden', !S.isAdmin || !S.requests.length);
-  $('#reqCount').textContent = S.requests.length;
+  const nReq = S.requests.length + S.joinRequests.length;
+  $('#reqBtn').classList.toggle('hidden', !S.isAdmin || !nReq);
+  $('#reqCount').textContent = nReq;
   $('#chatBadge').classList.toggle('hidden', !ui.unread); $('#chatBadge').textContent = ui.unread;
   layout();
   const newHand = h && h.id !== ui.handShown;
@@ -681,46 +683,59 @@ function renderActions(){
     const key = `${S.hand.id}-${S.hand.street}-${o.currentBet}-${o.myBet}-${ui.bbMode}`;
     if(box.dataset.key === key) return;
     box.dataset.key = key;
-    const callLabel = o.toCall === 0 ? 'Check' : (o.toCall >= me.chips ? `All-in ${fmtC(o.toCall)}` : `Call ${fmtC(o.toCall)}`);
-    const verb = o.currentBet === 0 ? 'Bet' : 'Raise to';
+    ui.raiseOpen = false;
+    const allInCall = o.toCall > 0 && o.toCall >= me.chips;
+    const callLabel = o.toCall === 0 ? 'Check' : allInCall ? `All-in<small>${fmtC(o.toCall)}</small>` : `Call<small>${fmtC(o.toCall)}</small>`;
+    const verb = o.currentBet === 0 ? 'Bet' : 'Raise';
     ui.raise = o.minRaiseTo;
     box.innerHTML = `
-      ${o.toCall > 0 ? '<button class="btn btn-danger" id="aFold" title="F">Fold</button>' : ''}
-      <button class="btn" id="aCall" title="C">${callLabel}</button>
-      ${o.canRaise ? `
-        <div class="raise-box">
-          <div class="presets">
-            <button class="chip-btn" data-p="min">Min</button><button class="chip-btn" data-p=".5">½ pot</button><button class="chip-btn" data-p=".75">¾ pot</button><button class="chip-btn" data-p="1">Pot</button><button class="chip-btn" data-p="max">All-in</button>
-          </div>
-          <input type="range" id="rRange" min="${o.minRaiseTo}" max="${o.maxRaiseTo}" step="${S.settings.sb}" value="${o.minRaiseTo}" aria-label="Raise amount">
-          <input type="number" id="rNum" min="${o.minRaiseTo}" max="${o.maxRaiseTo}" value="${o.minRaiseTo}" aria-label="Raise to">
-        </div>
-        <button class="btn btn-primary" id="aRaise">${verb} ${fmtC(o.minRaiseTo)}</button>` : ''}`;
-    const setRaise = v => {
-      v = Math.max(o.minRaiseTo, Math.min(o.maxRaiseTo, Math.round(Number(v) || 0)));
-      ui.raise = v; $('#rRange').value = v; $('#rNum').value = v;
-      $('#aRaise').textContent = v === o.maxRaiseTo ? `All-in ${fmtC(v)}` : `${verb} ${fmtC(v)}`;
-    };
+      <button class="btn act-btn fold" id="aFold" ${o.toCall === 0 ? 'disabled title="Nothing to fold to — you can check"' : ''}>Fold<kbd>F</kbd></button>
+      <button class="btn act-btn call" id="aCall">${callLabel}<kbd>C</kbd></button>
+      ${o.canRaise ? `<button class="btn act-btn raise" id="aRaise">${verb}<small id="aRaiseAmt">${fmtC(o.minRaiseTo)}</small><kbd>R</kbd></button>` : ''}`;
     if(o.canRaise){
+      // raise sizes: multiples of the big blind preflop/unopened, multiples of the bet when facing one
+      const bb = S.settings.bb, base = o.currentBet > bb ? o.currentBet : bb, baseLabel = base === bb ? 'bb' : '';
+      const sizes = [4, 3, 2.5, 2].map(m => ({ m, v: Math.round(base * m) })).filter(x => x.v > o.minRaiseTo - 1 || x.m === 2)
+        .map(x => ({ ...x, v: Math.max(o.minRaiseTo, Math.min(o.maxRaiseTo, x.v)) }));
+      const pop = document.createElement('div');
+      pop.className = 'raise-pop hidden'; pop.id = 'raisePop';
+      pop.innerHTML = `
+        <div class="rp-grid">
+          <div class="rp-presets">${sizes.map(x => `<button class="chip-btn rp-pre" data-v="${x.v}">${x.m}x ${baseLabel}</button>`).join('')}
+            <button class="chip-btn rp-pre allin" data-v="${o.maxRaiseTo}">All-in</button></div>
+          <input type="range" class="rp-slider" id="rRange" min="${o.minRaiseTo}" max="${o.maxRaiseTo}" step="${S.settings.sb}" value="${o.minRaiseTo}" aria-label="Raise amount" orient="vertical">
+        </div>
+        <div class="rp-row"><button class="sq-btn" id="rMinus" aria-label="Less">−</button><button class="sq-btn blue" id="rPlus" aria-label="More">+</button>
+          <input type="number" id="rNum" min="${o.minRaiseTo}" max="${o.maxRaiseTo}" value="${o.minRaiseTo}" aria-label="${verb} to"></div>
+        <div class="rp-note" id="rNote"></div>`;
+      box.appendChild(pop);
+      const setRaise = v => {
+        v = Math.max(o.minRaiseTo, Math.min(o.maxRaiseTo, Math.round(Number(v) || 0)));
+        ui.raise = v; $('#rRange').value = v; $('#rNum').value = v;
+        $('#aRaiseAmt').textContent = v === o.maxRaiseTo ? `All-in ${fmtC(v)}` : fmtC(v);
+        $('#rNote').textContent = v === o.maxRaiseTo ? 'all-in' : `(${verb.toLowerCase()} to ${fmtC(v)})`;
+      };
+      setRaise(o.minRaiseTo);
       $('#rRange').oninput = e => setRaise(e.target.value);
       $('#rNum').oninput = e => { ui.raise = Number(e.target.value); };
       $('#rNum').onchange = e => setRaise(e.target.value);
-      $$('.presets button', box).forEach(b => b.onclick = () => {
-        const p = b.dataset.p;
-        if(p === 'min') return setRaise(o.minRaiseTo);
-        if(p === 'max') return setRaise(o.maxRaiseTo);
-        setRaise(o.currentBet + Number(p) * (o.pot + o.toCall));   // call first, then raise a fraction of the pot
-      });
-      $('#aRaise').onclick = () => act('raise', ui.raise);
+      $('#rMinus').onclick = () => setRaise(ui.raise - bb);
+      $('#rPlus').onclick = () => setRaise(ui.raise + bb);
+      $$('.rp-pre', pop).forEach(b => b.onclick = () => setRaise(b.dataset.v));
+      // first tap opens the sizes; tapping Raise again sends it
+      $('#aRaise').onclick = () => {
+        if(!ui.raiseOpen){ ui.raiseOpen = true; pop.classList.remove('hidden'); $('#aRaise').classList.add('armed'); return; }
+        act('raise', ui.raise);
+      };
     }
     $('#aCall').onclick = () => act(o.toCall === 0 ? 'check' : 'call');
-    if($('#aFold')) $('#aFold').onclick = () => act('fold');
+    $('#aFold').onclick = () => act('fold');
     return;
   }
   const acting = S.hand && S.hand.actingSeat >= 0 ? S.seats[S.hand.actingSeat] : null;
   const handOn = S.hand && !S.hand.result;
   const ready = S.seats.filter(p => p && p.chips > 0).length;
-  const key = `idle-${S.status}-${S.youSeat}-${me && me.sittingOut}-${me && me.chips}-${me && me.standing}-${S.myWallet}-${S.hand && S.hand.id}-${S.hand && S.hand.actingSeat}-${!!handOn}-${ui.autoFold}-${S.isAdmin}-${ready}-${S.settings.autoDeal}-${S.settings.timerOn}`;
+  const key = `idle-${S.status}-${S.youSeat}-${me && me.sittingOut}-${me && me.chips}-${me && me.standing}-${me && me.allIn}-${S.myWallet}-${S.hand && S.hand.id}-${S.hand && S.hand.street}-${S.hand && S.hand.actingSeat}-${!!handOn}-${ui.pre}-${S.isAdmin}-${ready}-${S.settings.autoDeal}-${S.settings.timerOn}`;
   if(box.dataset.key === key) return;
   box.dataset.key = key;
   let html = '', note = '';
@@ -737,8 +752,11 @@ function renderActions(){
   } else if(me.sittingOut){
     html += `<button class="btn btn-primary" id="sitIn">I'm back</button>` + adminStart + adminDeal;
     note = 'You are away';
-  } else if(S.hand && me.inHand && !me.folded && handOn){
-    html += `<label class="check pre-act"><input type="checkbox" id="autoFold" ${ui.autoFold ? 'checked' : ''}> Check / fold</label>`;
+  } else if(S.hand && me.inHand && !me.folded && !me.allIn && handOn){
+    const pk = `${S.hand.id}-${S.hand.street}`;
+    if(ui.preKey !== pk){ ui.preKey = pk; ui.pre = null; }
+    html += ['chkfold:Chk / Fold', 'check:Check', 'callany:Call Any'].map(x => { const [k, l] = x.split(':');
+      return `<button class="btn act-btn pre ${ui.pre === k ? 'on' : ''}" data-pre="${k}" aria-pressed="${ui.pre === k}">${l}<span class="tick"></span></button>`; }).join('');
     note = acting ? `${esc(acting.name)} is deciding…` : '';
   } else {
     html += adminStart + adminDeal;
@@ -756,23 +774,28 @@ function renderActions(){
   on('topBtn', topUpDialog);
   on('standBtn', () => emit('stand'));
   on('sitIn', async () => { const r = await emit('sitOut', { value: false }); if(!r.ok) toast(r.error, true); });
-  if($('#autoFold')) $('#autoFold').onchange = e => { ui.autoFold = e.target.checked; };
+  $$('[data-pre]', box).forEach(b => b.onclick = () => { ui.pre = ui.pre === b.dataset.pre ? null : b.dataset.pre; box.dataset.key = ''; renderActions(); });
 }
 async function act(type, amount){
   const r = await emit('action', { type, amount });
   if(!r.ok) toast(r.error, true);
 }
+// A pre-selected move is played the moment it becomes your turn.
 function maybeAutoAct(){
-  if(!ui.autoFold || !S.options) return;
-  ui.autoFold = false;
-  act(S.options.toCall === 0 ? 'check' : 'fold');
+  const o = S.options, pre = ui.pre;
+  if(!pre || !o) return;
+  ui.pre = null;
+  if(pre === 'chkfold') act(o.toCall === 0 ? 'check' : 'fold');
+  else if(pre === 'check'){ if(o.toCall === 0) act('check'); }   // someone bet: let you decide
+  else if(pre === 'callany') act(o.toCall === 0 ? 'check' : 'call');
 }
 function hotkeys(e){
   if(!S || !S.options || /input|textarea|select/i.test(document.activeElement.tagName)) return;
   const k = e.key.toLowerCase();
-  if(k === 'f' && $('#aFold')) $('#aFold').click();
-  else if(k === 'c') $('#aCall').click();
-  else if(k === 'r' && $('#aRaise')) $('#aRaise').click();
+  if(k === 'f' && $('#aFold') && !$('#aFold').disabled) $('#aFold').click();
+  else if(k === 'c' && $('#aCall')) $('#aCall').click();
+  else if((k === 'r' || k === 'b') && $('#aRaise')) $('#aRaise').click();
+  else if(k === 'escape' && ui.raiseOpen){ ui.raiseOpen = false; $('#raisePop').classList.add('hidden'); $('#aRaise').classList.remove('armed'); }
 }
 async function host(cmd, extra = {}){
   const r = await emit('host', { cmd, ...extra });
@@ -1082,6 +1105,17 @@ function chipsHelpDialog(){
   $$('[data-x]', m).forEach(b => b.onclick = () => m.remove());
 }
 
+/* ================= waiting for the admin ================= */
+function waitingPage(st){
+  ui.view = 'waiting'; ui.built = false;
+  app.innerHTML = `<main class="waiting-page"><div class="wait-card">
+    <div class="wait-dots"><span></span><span></span><span></span></div>
+    <h2>Waiting for ${esc(st.adminName || 'the admin')}</h2>
+    <p>You've asked to join game <b>${esc(st.code)}</b>. You'll be let in as soon as the admin approves.</p>
+    <button class="btn btn-ghost" id="wCancel">Cancel</button></div></main>`;
+  $('#wCancel').onclick = async () => { await emit('leave'); saveSession(null); S = null; history.replaceState(null, '', '/'); landing('join'); };
+}
+
 /* ================= lobby ================= */
 function goLobby(){
   ui.view = 'lobby'; ui.built = false; ui.lobbyKey = '';
@@ -1100,7 +1134,7 @@ function goHome(){
 function renderLobby(){
   if(ui.view !== 'lobby' || !S) return;
   const s = S.settings;
-  const key = JSON.stringify([S.members, s, S.requests, S.myWallet, S.isAdmin, S.handCount, S.hand && S.hand.id, S.status, S.seats.filter(Boolean).length]);
+  const key = JSON.stringify([S.members, s, S.requests, S.joinRequests, S.myWallet, S.isAdmin, S.handCount, S.hand && S.hand.id, S.status, S.seats.filter(Boolean).length]);
   if(ui.lobbyKey === key) return;
   ui.lobbyKey = key;
   const seatedN = S.seats.filter(Boolean).length;
@@ -1131,11 +1165,13 @@ function renderLobby(){
           <button class="btn btn-primary" id="lTable">Table ${ICON2.back.replace('m15 18-6-6 6-6', 'm9 18 6-6-6-6')}</button>
         </div>
       </section>
-      ${S.isAdmin && S.requests.length ? `<section class="requests">
-        <div class="section-title">Chip requests</div>
-        ${S.requests.map(r => `<div class="req-row" data-req="${r.id}"><span>${esc(r.name)}</span>
+      ${S.isAdmin && (S.requests.length || S.joinRequests.length) ? `<section class="approvals">
+        <div class="section-title">Requests for admin approval</div>
+        ${S.joinRequests.map(j => `<div class="appr-row" data-join="${j.id}"><span><b>${esc(j.name)}</b> wants to join</span>
+          <button class="sq-btn no" data-reject aria-label="Decline ${esc(j.name)}">✕</button><button class="sq-btn yes" data-admit aria-label="Let ${esc(j.name)} in">✓</button></div>`).join('')}
+        ${S.requests.map(r => `<div class="appr-row" data-req="${r.id}"><span><b>${esc(r.name)}</b> wants chips</span>
           <input type="number" min="1" value="${r.amount}" aria-label="Chips for ${esc(r.name)}">
-          <button class="btn btn-sm btn-primary" data-approve>Give</button><button class="btn btn-sm btn-ghost" data-deny>Decline</button></div>`).join('')}
+          <button class="sq-btn no" data-deny aria-label="Decline">✕</button><button class="sq-btn yes" data-approve aria-label="Give chips">✓</button></div>`).join('')}
       </section>` : ''}
       <section class="balances">
         <div class="bal-head"><span>Balances</span><span>Chips</span><span></span><span>+/−</span></div>
@@ -1167,6 +1203,10 @@ function renderLobby(){
   $('#lRanks').onclick = rankingsDialog;
   $$('[data-menu]').forEach(b => b.onclick = () => popMenu(b, memberItems(S.members.find(m => m.id === b.dataset.menu))));
   $$('[data-dollar]').forEach(b => b.onclick = () => S.isAdmin ? chipsDialog('give', b.dataset.dollar) : chipsDialog('ask'));
+  $$('[data-join]').forEach(row => {
+    row.querySelector('[data-admit]').onclick = () => host('admit', { playerId: row.dataset.join });
+    row.querySelector('[data-reject]').onclick = () => host('reject', { playerId: row.dataset.join });
+  });
   $$('[data-req]').forEach(row => {
     row.querySelector('[data-approve]').onclick = () => host('approve', { requestId: row.dataset.req, amount: Number(row.querySelector('input').value) });
     row.querySelector('[data-deny]').onclick = () => host('deny', { requestId: row.dataset.req });
@@ -1177,14 +1217,18 @@ const initials = n => n.replace(/["'].*?["']/g, '').split(/\s+/).filter(Boolean)
 /* ================= connection ================= */
 socket.on('state', st => {
   if(!session) return;
-  if(!st.members.some(m => m.id === st.you)){   // removed by the admin
+  if(st.pending){ S = null; P = null; if(ui.view !== 'waiting' || !$('.waiting-page')) waitingPage(st); return; }
+  if(!st.members.some(m => m.id === st.you)){   // declined or removed by the admin
+    const wasWaiting = ui.view === 'waiting';
     saveSession(null); S = null; history.replaceState(null, '', '/');
-    landing('join'); toast('The admin removed you from the game.', true); return;
+    landing('join'); toast(wasWaiting ? "The admin didn't let you in." : 'The admin removed you from the game.', true); return;
   }
-  const chatGrew = S && st.chat.length > S.chat.length && !(ui.panelOpen && ui.tab === 'chat' && ui.view === 'table');
+  if(ui.view === 'waiting'){ ui.view = 'lobby'; ui.lobbyKey = ''; toast("You're in!"); }
+  const chatGrew = S && S.chat && st.chat.length > S.chat.length && !(ui.panelOpen && ui.tab === 'chat' && ui.view === 'table');
   P = S; S = st; receivedAt = performance.now();
   if(chatGrew) ui.unread += st.chat.length - P.chat.length;
-  if(S.isAdmin && P && S.requests.length > P.requests.length){ const r = S.requests.at(-1); toast(`${r.name} is asking for ${fmt(r.amount)} chips`); SFX.turn(); }
+  if(S.isAdmin && P && P.requests && S.requests.length > P.requests.length){ const r = S.requests.at(-1); toast(`${r.name} is asking for ${fmt(r.amount)} chips`); SFX.turn(); }
+  if(S.isAdmin && P && P.joinRequests && S.joinRequests.length > P.joinRequests.length){ toast(`${S.joinRequests.at(-1).name} wants to join`); SFX.turn(); }
   if(ui.view === 'table') update();
   else if(ui.view === 'lobby') renderLobby();
 });
@@ -1201,7 +1245,7 @@ socket.on('connect', async () => {
   const urlRoom = (params.get('room') || '').toUpperCase();
   if(session && (!urlRoom || urlRoom === session.code)){
     const r = await emit('resume', session);
-    if(r.ok){ if(!S || ui.view === 'landing' || ui.view === 'home') enterGame(); return; }
+    if(r.ok){ if(ui.view === 'waiting') return; if(!S || ui.view === 'landing' || ui.view === 'home') enterGame(); return; }
     saveSession(null);
     if(S){ S = null; toast('That game has closed. Join again with the code.', true); }
   }
