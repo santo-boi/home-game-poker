@@ -4,12 +4,14 @@ Private No-Limit Hold'em tables for you and your friends. One person hosts a tab
 
 ## What it does
 
-- **Rooms:** host a table, share the code or invite link, friends join with their name and a buy-in.
-- **Host controls:** blinds, minimum and maximum buy-in, seconds per turn, rebuys on or off, start and pause, add computer players, remove a player, hand the host role to someone else. Changes made during a hand apply from the next hand.
-- **Real rules:** blinds and button rotation (including heads-up rules), minimum raises, short all-ins, side pots, split pots with odd chips to the left of the button, turn timer with auto check/fold.
-- **Animations:** cards fly from the deck one at a time, your cards turn over, the flop turns card by card, and in an all-in run-out the river is lifted, squeezed and turned slowly.
-- **Odds panel:** your win, tie and lose chances on every street, exact wherever that is fast (heads-up on every street, three-handed from the flop) and simulated with an error bar otherwise.
-- **Table ledger:** everyone's total buy-in, stack and net, so settling up after the game is easy.
+- **Rooms for up to 10 players:** host a table, share the invite link, friends join with just their name.
+- **The host controls the chips:** players ask for chips and the host approves, changes or declines each request. The host can also give or take back chips at any time; chips given during a hand arrive when it ends.
+- **Table settings (host only):** maximum players, small and big blind, ante, blinds that double on a schedule, turn timer on or off, seconds per turn, time bank, standard buy-in, run it twice, rabbit hunting, muck losing hands, bomb pots (every N hands, or on demand), and automatic or manual dealing. Settings can be saved as presets. Changes made during a hand apply from the next hand.
+- **Host controls:** start, pause, deal the next hand, call a bomb pot, skip a slow player's turn (when the timer is off), add computer players, remove a player, hand the host role to someone else.
+- **Real rules:** blinds and button rotation (including heads-up rules), antes, minimum raises, short all-ins, side pots, split pots with odd chips to the left of the button.
+- **Animations:** cards fly from the deck one at a time, the flop turns card by card, and in an all-in run-out the river is lifted, squeezed and turned slowly. With run it twice, the second board is dealt below the first.
+- **Odds panel:** your win, tie and lose chances, exact wherever that is fast and simulated with an error bar otherwise.
+- **Ledger:** everyone's chips given, stack and net, so settling up is easy.
 - **Reconnects:** if someone's phone locks or their browser reloads, they return to the same seat.
 
 ## Run it on your own computer

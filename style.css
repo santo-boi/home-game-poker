@@ -315,3 +315,61 @@ details.more[open] summary{ margin-bottom: 14px; }
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{ animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- settings, chips, run it twice (v2) ---------- */
+.dim{ color: var(--text-dim); }
+.small{ font-size: 12px; }
+.hint-line{ margin: -4px 0 0; font-size: 13px; color: var(--text-dim); }
+.btn-row{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.badge{ display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--brass); color: #1d1406; font-size: 12px; font-weight: 800; }
+#reqBtn{ border-color: rgba(212,162,70,.6); }
+.row3{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.set-group{ border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.set-group legend{ padding: 0 6px; font-weight: 700; font-size: 13px; color: var(--ivory); }
+.switch-row{ display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
+.switch-row .sw-label{ display: block; font-weight: 600; font-size: 14px; }
+.switch-row .sw-hint{ display: block; font-size: 12px; color: var(--text-dim); }
+input.switch{ appearance: none; -webkit-appearance: none; flex: none; width: 42px; height: 24px; border-radius: 999px; background: #33415a; position: relative; cursor: pointer; transition: background .2s; margin: 0; }
+input.switch::after{ content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--ivory); transition: transform .2s; }
+input.switch:checked{ background: var(--brass); }
+input.switch:checked::after{ transform: translateX(18px); }
+.timer-fields.disabled{ opacity: .35; pointer-events: none; }
+.preset-row{ display: flex; gap: 8px; }
+.preset-row select{ flex: 1; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.landing-forms .panel-card{ max-height: calc(100vh - 80px); overflow-y: auto; padding-right: 4px; }
+.modal.wide{ max-width: 560px; max-height: 92vh; }
+.modal-head{ display: flex; align-items: center; justify-content: space-between; }
+.modal-scroll{ overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; min-height: 0; }
+.modal .quick{ display: flex; gap: 6px; flex-wrap: wrap; }
+.requests{ border: 1px solid rgba(212,162,70,.5); border-radius: 12px; padding: 12px; background: var(--brass-soft); margin-top: 4px; }
+.req-row{ display: grid; grid-template-columns: 1fr 90px auto auto; gap: 6px; align-items: center; font-size: 14px; margin-top: 6px; }
+.req-row input{ background: rgba(0,0,0,.3); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; text-align: right; width: 100%; }
+.chip-btns{ white-space: nowrap; }
+.mini{ width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: transparent; font-weight: 700; padding: 0; margin-left: 3px; }
+.mini:hover{ border-color: var(--brass); color: var(--brass); }
+.table.two-runs #board{ top: 37%; }
+.table.two-runs .pot{ top: 19%; }
+.table.two-runs .banner{ top: 19%; }
+#board2{ top: 59%; }
+.card.shared .face{ filter: brightness(.7); }
+.card.rabbit .face{ filter: grayscale(.4) brightness(.6); }
+.card.rabbit::before{ content: ''; }
+.seat .chips{ max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px){
+  :root{ --cw-seat: 24px; }
+  .row3{ grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .seat{ width: 88px; }
+  .seat .plate{ min-width: 82px; padding: 4px 6px 5px 32px; }
+  .seat .avatar{ width: 24px; height: 24px; font-size: 10px; left: 4px; }
+  .seat .ring{ width: 30px; height: 30px; left: 1px; }
+  .seat .name{ max-width: 52px; }
+  .seat .chips{ max-width: 52px; font-size: 11px; }
+  .seat .cards{ margin-bottom: -6px; }
+  .seat .hand-name{ font-size: 10px; }
+  .table.two-runs #board{ top: 40%; }
+  #board2{ top: 56%; }
+  #setBtn span, #reqBtn{ font-size: 0; }
+  #reqBtn .badge{ font-size: 12px; }
+  .req-row{ grid-template-columns: 1fr 80px auto; }
+  .req-row [data-deny]{ grid-column: 1 / -1; justify-self: end; }
+}

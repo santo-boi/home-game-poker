@@ -82,34 +82,32 @@ io.on('connection', socket => {
     return c;
   };
 
-  handle(socket, 'createRoom', ({ name, settings, buyIn, bots }) => {
+  handle(socket, 'createRoom', ({ name, settings, startChips, bots }) => {
     name = cleanName(name);
     if(!name) throw new Error('Enter your name.');
-    const s = validateSettings({ sb: 10, bb: 20, minBuyIn: 1000, maxBuyIn: 5000, turnSeconds: 30, allowRebuy: true, ...settings });
-    buyIn = Math.floor(Number(buyIn));
-    if(!(buyIn >= s.minBuyIn && buyIn <= s.maxBuyIn)) throw new Error(`Buy in between ${s.minBuyIn} and ${s.maxBuyIn}.`);
+    const s = validateSettings(settings || {});
     const code = newCode();
     const table = new Table(code, s, broadcast);
     rooms.set(code, table);
-    const p = table.addPlayer({ name, buyIn });
+    const p = table.addPlayer({ name });
     attach(socket, table, p);
-    const n = Math.max(0, Math.min(7, Math.floor(Number(bots) || 0)));
+    const chips = Math.floor(Number(startChips));
+    if(chips > 0) table.give(p.id, chips);
+    const n = Math.max(0, Math.min(s.maxPlayers - 1, Math.floor(Number(bots) || 0)));
     for(let i = 0; i < n; i++) table.addBot();
     console.log(`room ${code} created by ${name}`);
     return { code, token: p.token };
   });
 
-  handle(socket, 'joinRoom', ({ code, name, buyIn }) => {
+  handle(socket, 'joinRoom', ({ code, name }) => {
     const table = rooms.get(cleanCode(code));
     if(!table) throw new Error('No table has that code. Check it with the host.');
     name = cleanName(name);
     if(!name) throw new Error('Enter your name.');
     if(table.seated().some(p => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Someone at the table already has that name.');
-    const s = table.settings;
-    buyIn = Math.floor(Number(buyIn));
-    if(!(buyIn >= s.minBuyIn && buyIn <= s.maxBuyIn)) throw new Error(`Buy in between ${s.minBuyIn.toLocaleString()} and ${s.maxBuyIn.toLocaleString()}.`);
-    const p = table.addPlayer({ name, buyIn });
+    const p = table.addPlayer({ name });
     attach(socket, table, p);
+    table.requestChips(p.id, table.settings.defaultBuyIn);   // the host sees a buy-in request straight away
     return { code: table.code, token: p.token };
   });
 
@@ -130,7 +128,8 @@ io.on('connection', socket => {
   });
 
   handle(socket, 'action', a => { const { t, p } = current(); t.act(p.id, { type: a.type, amount: a.amount }); });
-  handle(socket, 'rebuy', ({ amount }) => { const { t, p } = current(); t.rebuy(p.id, amount); });
+  handle(socket, 'requestChips', ({ amount }) => { const { t, p } = current(); t.requestChips(p.id, amount); });
+  handle(socket, 'cancelRequest', () => { const { t, p } = current(); t.cancelRequest(p.id); });
   handle(socket, 'sitOut', ({ value }) => { const { t, p } = current(); t.setSittingOut(p.id, value); });
   handle(socket, 'chat', ({ text }) => {
     const { t, p } = current();
@@ -146,12 +145,19 @@ io.on('connection', socket => {
     broadcast(t);
   });
 
-  handle(socket, 'host', ({ cmd, settings, playerId }) => {
+  handle(socket, 'host', ({ cmd, settings, playerId, requestId, amount }) => {
     const { t } = hostOnly();
     if(cmd === 'start') t.start();
     else if(cmd === 'pause') t.pause();
     else if(cmd === 'settings') t.updateSettings(settings || {});
     else if(cmd === 'addBot') t.addBot();
+    else if(cmd === 'deal') t.dealNext();
+    else if(cmd === 'skip') t.skipTurn();
+    else if(cmd === 'bomb') t.queueBomb();
+    else if(cmd === 'give') t.give(playerId, amount);
+    else if(cmd === 'take') t.take(playerId, amount);
+    else if(cmd === 'approve') t.approve(requestId, amount);
+    else if(cmd === 'deny') t.deny(requestId);
     else if(cmd === 'kick'){
       const target = t.players.get(playerId);
       if(!target) throw new Error('That player has already left.');
