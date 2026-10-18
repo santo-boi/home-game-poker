@@ -448,6 +448,8 @@ class Table {
   advance(){
     const h = this.hand;
     if(!h || h.result) return;
+    // a card or the second run is already on its way: a second call must not deal it again
+    if(h.streetPending || h.secondRunPending) return;
     const live = this.live();
     if(live.length === 1) return this.finishUncontested(live[0]);
     const canAct = this.canAct();
@@ -462,7 +464,7 @@ class Table {
     for(const p of this.inHand()){ p.bet = 0; if(!p.folded && !p.allIn && h.street !== 'river') p.lastAction = null; }
     h.currentBet = 0; h.minRaise = this.settings.bb; h.acted = new Set(); h.lastActorSeat = null;
     if(h.street === 'river'){
-      if(h.runTwice && !h.board2) return this.dealSecondRun();
+      if(h.runTwice && !h.board2){ h.secondRunPending = true; return this.dealSecondRun(); }
       return this.showdown();
     }
     const runout = canAct.length <= 1;
@@ -476,7 +478,7 @@ class Table {
     const wait = runout ? (nextStreet === 'river' ? DELAY.runoutRiver : DELAY.runoutStreet) : DELAY.street;
     h.streetPending = nextStreet;
     this.later(wait, () => {
-      if(!this.hand || this.hand.id !== h.id || h.result) return;
+      if(!this.hand || this.hand.id !== h.id || h.result || h.streetPending !== nextStreet) return;
       h.streetPending = null;
       h.deck.pop(); // burn
       const n = nextStreet === 'flop' ? 3 : 1;
@@ -508,6 +510,7 @@ class Table {
 
   finishUncontested(winner){
     const h = this.hand;
+    if(!h || h.result) return;   // already settled
     clearTimeout(this.turnTimer);
     const pot = this.potTotal();
     const { payouts, won } = this.splitPots(['score']);
@@ -529,6 +532,7 @@ class Table {
 
   showdown(){
     const h = this.hand;
+    if(!h || h.result) return;   // already settled
     clearTimeout(this.turnTimer);
     const live = this.live();
     for(const p of live){

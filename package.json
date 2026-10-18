@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "express": "^4.21.0",
-    "pg": "^8.23.1",
     "socket.io": "^4.8.0"
   },
   "devDependencies": {

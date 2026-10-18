@@ -20,13 +20,10 @@ const KEY = (() => {
   if(q.has('key')){ q.delete('key'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '')); }
   return k || '';
 })();
-// The login token is remembered on this device and sent each time the browser connects.
-const loadAuth = () => { try { return localStorage.getItem('hgAuth') || ''; } catch(e){ return ''; } };
-const socket = io({ transports: ['websocket', 'polling'], auth: { key: KEY, token: loadAuth() } });
-function setAuth(token){
-  try { token ? localStorage.setItem('hgAuth', token) : localStorage.removeItem('hgAuth'); } catch(e){}
-  socket.auth = { key: KEY, token: token || '' };
-}
+const socket = io({ transports: ['websocket', 'polling'], auth: { key: KEY } });
+// your name is remembered on this device so you don't have to type it every time
+const loadName = () => { try { return localStorage.getItem('hgName') || ''; } catch(e){ return ''; } };
+const saveName = n => { try { localStorage.setItem('hgName', n); } catch(e){} };
 const app = $('#app');
 let S = null;                 // latest state from the server
 let P = null;                 // previous state
@@ -176,8 +173,6 @@ function landing(mode = 'join', code = ''){
     </section>
     <section class="landing-forms">
       <div class="panel-card">
-        <div class="acct-bar"><span>Signed in as <b>${esc(ui.user ? ui.user.name : '')}</b></span>
-          <button type="button" class="btn btn-sm" id="histBtn">My history</button><button type="button" class="btn btn-sm btn-ghost" id="logoutBtn">Log out</button></div>
         ${session && S ? `<div class="rejoin"><div><div class="dim small">You're in a game</div><div class="rj-code">${esc(S.code)}</div></div>
           <button type="button" class="btn btn-primary" id="rjGo">Return to game</button><button type="button" class="btn btn-ghost btn-sm" id="rjLeave">Leave it</button></div>` : ''}
         <div class="tabs" role="tablist">
@@ -185,6 +180,7 @@ function landing(mode = 'join', code = ''){
           <button role="tab" data-mode="create" aria-selected="${mode === 'create'}">Host a table</button>
         </div>
         <form id="joinForm" class="stack ${mode === 'join' ? '' : 'hidden'}" autocomplete="off">
+          <div class="field"><label for="jName">Your name</label><input id="jName" maxlength="20" placeholder="How the table sees you" value="${esc(loadName())}" autocomplete="nickname"></div>
           <div class="field"><label for="jCode">Table code</label><input id="jCode" class="code-input" maxlength="5" placeholder="·····" value="${esc(code)}" inputmode="text" autocapitalize="characters"></div>
           <div id="preview" class="room-preview hidden"></div>
           <p class="hint-line">The admin gives you chips, then you buy in when you sit down at the table.</p>
@@ -192,6 +188,7 @@ function landing(mode = 'join', code = ''){
           <button class="btn btn-primary" type="submit">Take a seat</button>
         </form>
         <form id="createForm" class="stack ${mode === 'create' ? '' : 'hidden'}" autocomplete="off">
+          <div class="field"><label for="cName">Your name</label><input id="cName" maxlength="20" placeholder="How the table sees you" value="${esc(loadName())}" autocomplete="nickname"></div>
           <div class="field"><label for="cChips">Chips for your own wallet</label><input id="cChips" type="number" min="0" value="2000"></div>
           <div class="field"><label for="cBots">Computer players</label><select id="cBots">${[0,1,2,3,4,5,6,7,8,9].map(n => `<option value="${n}">${n === 0 ? 'None — just friends' : n}</option>`).join('')}</select></div>
           <details class="more"><summary>Table settings</summary><div class="stack" id="createSettings">${settingsFields({})}</div></details>
@@ -221,171 +218,30 @@ function landing(mode = 'join', code = ''){
   };
   codeIn && (codeIn.oninput = peek);
   if(code) peek();
-  if(mode === 'join') codeIn.focus(); else $('#cChips').focus();
-  $('#histBtn').onclick = () => historyPage();
-  $('#logoutBtn').onclick = logout;
+  const first = mode === 'join' ? (!$('#jName').value ? $('#jName') : codeIn) : (!$('#cName').value ? $('#cName') : $('#cChips'));
+  first.focus();
 
   $('#joinForm').onsubmit = async e => {
     e.preventDefault();
-    const r = await emit('joinRoom', { code: codeIn.value });
+    const name = $('#jName').value.trim();
+    if(!name){ $('#jErr').textContent = 'Enter your name.'; return $('#jName').focus(); }
+    const r = await emit('joinRoom', { code: codeIn.value, name });
     if(!r.ok) return $('#jErr').textContent = r.error;
+    saveName(name);
     saveSession({ code: r.code, token: r.token }); history.replaceState(null, '', `/?room=${r.code}`);
     try { sessionStorage.setItem('hgView', 'lobby'); } catch(e){}
     ui.view = r.pending ? 'waiting' : 'lobby'; ui.lobbyKey = '';
   };
   $('#createForm').onsubmit = async e => {
     e.preventDefault();
-    const r = await emit('createRoom', { settings: readSettings($('#createForm')), startChips: $('#cChips').value, bots: $('#cBots').value });
+    const name = $('#cName').value.trim();
+    if(!name){ $('#cErr').textContent = 'Enter your name.'; return $('#cName').focus(); }
+    const r = await emit('createRoom', { name, settings: readSettings($('#createForm')), startChips: $('#cChips').value, bots: $('#cBots').value });
     if(!r.ok) return $('#cErr').textContent = r.error;
+    saveName(name);
     saveSession({ code: r.code, token: r.token }); history.replaceState(null, '', `/?room=${r.code}`);
     ui.view = 'lobby'; ui.lobbyKey = ''; try { sessionStorage.setItem('hgView', 'lobby'); } catch(e){}
   };
-}
-
-/* ================= accounts ================= */
-// mode: login | signup | verify | forgot | reset   (ctx.email carries over between steps)
-function authPage(mode = 'login', msg = '', ctx = {}){
-  ui.view = 'auth'; ui.built = false;
-  const tabs = mode === 'login' || mode === 'signup';
-  const titles = { verify: 'Check your email', forgot: 'Reset your password', reset: 'Choose a new password' };
-  const intro = {
-    verify: `We sent a 6-digit code to <b>${esc(ctx.email || '')}</b>. Enter it to confirm your account. Check your spam folder if it isn't in your inbox.`,
-    forgot: "Enter your account's email and we'll send you a code.",
-    reset: `Enter the code we sent to <b>${esc(ctx.email || '')}</b> and your new password.`,
-  };
-  app.innerHTML = `
-  <main class="landing">
-    <section class="landing-hero">
-      <div>
-        <h1>Home<br>Game</h1>
-        <p>Private Hold'em with your friends. Your account keeps every game you play: your results, the hands you won and how you're doing over time.</p>
-      </div>
-      <div class="hero-fan" aria-hidden="true"></div>
-    </section>
-    <section class="landing-forms">
-      <div class="panel-card">
-        ${tabs ? `<div class="tabs" role="tablist">
-          <button role="tab" data-mode="login" aria-selected="${mode === 'login'}">Log in</button>
-          <button role="tab" data-mode="signup" aria-selected="${mode === 'signup'}">Create account</button>
-        </div>` : `<div><h2 class="auth-title">${titles[mode]}</h2><p class="dim auth-intro">${intro[mode]}</p></div>`}
-        <form id="authForm" class="stack" autocomplete="on">
-          ${mode === 'login' || mode === 'signup' || mode === 'forgot' ? `<div class="field"><label for="aEmail">Email</label><input id="aEmail" type="email" autocomplete="email" value="${esc(ctx.email || '')}" required></div>` : ''}
-          ${mode === 'signup' ? `<div class="field"><label for="aName">Name at the table</label><input id="aName" maxlength="20" autocomplete="nickname" required><span class="hint">What other players see, for example Santo.</span></div>` : ''}
-          ${mode === 'verify' || mode === 'reset' ? `<div class="field"><label for="aCode">6-digit code</label><input id="aCode" class="code-input otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="······" required></div>` : ''}
-          ${mode === 'login' || mode === 'signup' || mode === 'reset' ? `<div class="field"><label for="aPass">${mode === 'reset' ? 'New password' : 'Password'}</label><input id="aPass" type="password" minlength="6" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" required>${mode !== 'login' ? '<span class="hint">At least 6 characters.</span>' : ''}</div>` : ''}
-          <div class="error" id="aErr">${esc(msg)}</div>
-          <div class="ok-msg" id="aOk"></div>
-          <button class="btn btn-primary" type="submit">${{ login: 'Log in', signup: 'Create account', verify: 'Confirm', forgot: 'Send code', reset: 'Save new password' }[mode]}</button>
-          ${mode === 'login' ? '<button type="button" class="link-btn" id="aForgot">Forgot your password?</button>' : ''}
-          ${mode === 'verify' || mode === 'reset' ? '<button type="button" class="link-btn" id="aResend">Send a new code</button>' : ''}
-          ${!tabs ? '<button type="button" class="link-btn" id="aBack">Back to log in</button>' : ''}
-        </form>
-      </div>
-    </section>
-  </main>`;
-  fanCards();
-  $$('.tabs button').forEach(b => b.onclick = () => authPage(b.dataset.mode, '', { email: $('#aEmail') ? $('#aEmail').value : '' }));
-  const first = $('#aCode') || $('#aEmail'); if(first) first.focus();
-  if($('#aForgot')) $('#aForgot').onclick = () => authPage('forgot', '', { email: $('#aEmail').value });
-  if($('#aBack')) $('#aBack').onclick = () => authPage('login', '', ctx);
-  if($('#aResend')) $('#aResend').onclick = async () => {
-    const r = await emit('resendCode', { email: ctx.email, purpose: mode === 'reset' ? 'reset' : 'verify' });
-    $('#aErr').textContent = r.ok ? '' : r.error; $('#aOk').textContent = r.ok ? 'A new code is on its way.' : '';
-  };
-  if($('#aCode')) $('#aCode').oninput = e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); };
-  const done = r => { setAuth(r.token); ui.user = r.user; toast(`Welcome, ${r.user.name}`); startSignedIn(); };
-  $('#authForm').onsubmit = async e => {
-    e.preventDefault();
-    const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
-    const v = id => $(id) ? $(id).value : undefined;
-    let r;
-    if(mode === 'signup') r = await emit('signup', { email: v('#aEmail'), name: v('#aName'), password: v('#aPass') });
-    else if(mode === 'login') r = await emit('login', { email: v('#aEmail'), password: v('#aPass') });
-    else if(mode === 'verify') r = await emit('verifyEmail', { email: ctx.email, code: v('#aCode') });
-    else if(mode === 'forgot') r = await emit('forgotPassword', { email: v('#aEmail') });
-    else r = await emit('resetPassword', { email: ctx.email, code: v('#aCode'), password: v('#aPass') });
-    btn.disabled = false;
-    if(!r.ok){
-      if(r.code === 'unverified') return authPage('verify', '', { email: v('#aEmail') });
-      return $('#aErr').textContent = r.error;
-    }
-    if(r.needVerify) return authPage('verify', '', { email: r.email });
-    if(mode === 'forgot') return authPage('reset', '', { email: v('#aEmail').trim().toLowerCase() });
-    if(mode === 'reset') toast('Password changed');
-    done(r);
-  };
-}
-async function logout(){
-  if(S && session) { /* stay in any game you're in; you can log back in to return */ }
-  await emit('logout', { token: loadAuth() });
-  setAuth(''); ui.user = null; saveSession(null); S = null;
-  history.replaceState(null, '', '/');
-  socket.disconnect(); socket.connect();   // reconnect as signed out
-}
-// History: every game you've played, and the hands inside each one.
-const hcard = t => t ? t.split(' ').map(c => { const r = c[0] === 'T' ? '10' : c[0], st = { s: '♠', h: '♥', d: '♦', c: '♣' }[c[1]]; return `<span class="mc ${c[1] === 'h' || c[1] === 'd' ? 'red' : ''}">${r}<i>${st}</i></span>`; }).join('') : '';
-const sgnN = n => `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`;
-const dateStr = t => new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-const timeStr = t => new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
-async function historyPage(){
-  ui.view = 'history'; ui.built = false;
-  app.innerHTML = `<main class="lobby"><header class="lbar"><button class="round-btn" id="hBack" aria-label="Back">${ICON2.back}</button>
-    <div class="lcode"><div class="lbl">Signed in as</div><div class="val hist-name">${esc(ui.user ? ui.user.name : '')}</div></div></header>
-    <div class="lobby-col" id="histBody"><p class="dim">Loading your games…</p></div></main>`;
-  $('#hBack').onclick = () => landing('join');
-  const r = await emit('history');
-  if(ui.view !== 'history') return;
-  if(!r.ok){ $('#histBody').innerHTML = `<p class="error">${esc(r.error)}</p>`; return; }
-  const games = r.games;
-  if(!games.length){ $('#histBody').innerHTML = `<section class="game-card"><div class="gc-name">No games yet</div><p class="dim">Your games show up here as soon as you play your first hand.</p></section>`; return; }
-  const net = games.reduce((a, g) => a + g.net, 0), hands = games.reduce((a, g) => a + g.hands, 0), won = games.reduce((a, g) => a + g.handsWon, 0);
-  const best = Math.max(...games.map(g => g.net)), biggest = Math.max(...games.map(g => g.biggestPot));
-  // running net, oldest game first
-  const asc = [...games].reverse(); let run = 0; const pts = [0, ...asc.map(g => (run += g.net))];
-  const W = 600, H = 150, pad = 8, lo = Math.min(0, ...pts), hi = Math.max(0, ...pts), span = hi - lo || 1;
-  const X = i => pad + (W - 2 * pad) * (pts.length === 1 ? 0 : i / (pts.length - 1)), Y = v => pad + (H - 2 * pad) * (1 - (v - lo) / span);
-  const line = pts.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
-  $('#histBody').innerHTML = `
-    <section class="stats">
-      <div class="stat"><div class="lbl">Total</div><div class="val ${net > 0 ? 'pos' : net < 0 ? 'neg' : ''}">${sgnN(net)}</div></div>
-      <div class="stat"><div class="lbl">Games</div><div class="val">${games.length}</div></div>
-      <div class="stat"><div class="lbl">Hands won</div><div class="val">${fmt(won)}<span class="of"> of ${fmt(hands)}</span></div></div>
-      <div class="stat"><div class="lbl">Best game</div><div class="val">${sgnN(best)}</div></div>
-      <div class="stat"><div class="lbl">Biggest pot won</div><div class="val">${fmt(biggest)}</div></div>
-    </section>
-    <section class="chart-card"><div class="section-title">Your running total, game by game</div>
-      <svg viewBox="0 0 ${W} ${H}" class="net-chart" role="img" aria-label="Running total over ${games.length} games, now ${sgnN(net)}">
-        <line x1="${pad}" x2="${W - pad}" y1="${Y(0)}" y2="${Y(0)}" class="zero"/>
-        <path d="${line}" class="ln ${net >= 0 ? 'up' : 'down'}"/>
-        ${pts.map((v, i) => i ? `<circle cx="${X(i)}" cy="${Y(v)}" r="3" class="dot ${v >= 0 ? 'up' : 'down'}"><title>${dateStr(asc[i - 1].startedAt)}: ${sgnN(asc[i - 1].net)} (total ${sgnN(v)})</title></circle>` : '').join('')}
-      </svg></section>
-    <section class="balances">
-      <div class="hist-head"><span>Game</span><span>Hands</span><span>Given</span><span>+/−</span></div>
-      ${games.map(g => `<button class="hist-row" data-g="${esc(g.gameKey)}">
-        <span><b>${dateStr(g.startedAt)}</b><span class="sub">${timeStr(g.startedAt)} · ${esc(g.code)} · blinds ${esc(g.blinds || '')}${g.admin ? ` · ${esc(g.admin)}'s game` : ''}</span></span>
-        <span>${g.hands}</span><span>${fmt(g.given)}</span><span class="${g.net > 0 ? 'pos' : g.net < 0 ? 'neg' : ''}">${sgnN(g.net)}</span></button>`).join('')}
-    </section>`;
-  $$('[data-g]').forEach(b => b.onclick = () => gameHandsPage(games.find(g => g.gameKey === b.dataset.g)));
-}
-async function gameHandsPage(g){
-  ui.view = 'history';
-  app.innerHTML = `<main class="lobby"><header class="lbar"><button class="round-btn" id="hBack" aria-label="Back to all games">${ICON2.back}</button>
-    <div class="lcode"><div class="lbl">${dateStr(g.startedAt)} · ${esc(g.code)}</div><div class="val ${g.net > 0 ? 'pos' : g.net < 0 ? 'neg' : ''}">${sgnN(g.net)}</div></div></header>
-    <div class="lobby-col" id="histBody"><p class="dim">Loading hands…</p></div></main>`;
-  $('#hBack').onclick = () => historyPage();
-  const r = await emit('gameHands', { gameKey: g.gameKey });
-  if(!r.ok){ $('#histBody').innerHTML = `<p class="error">${esc(r.error)}</p>`; return; }
-  $('#histBody').innerHTML = `
-    <p class="dim">${fmt(g.hands)} hands · won ${fmt(g.handsWon)} · given ${fmt(g.given)} · finished with ${fmt(g.final)}</p>
-    <section class="balances">${r.hands.map(h => `<div class="hand-row">
-      <div class="hr-no">#${h.handNo}</div>
-      <div class="hr-cards"><div class="hole">${hcard(h.hole)}</div><div class="brd">${hcard(h.board)}${h.board2 ? `<span class="dim small"> / </span>${hcard(h.board2.split(' ').slice(-2).join(' '))}` : ''}</div></div>
-      <div class="hr-what">${h.folded ? '<span class="dim">Folded</span>' : esc(h.handName || (h.won ? 'Won' : '—'))}<span class="sub">pot ${fmt(h.pot)} · ${h.players} players</span></div>
-      <div class="hr-net ${h.delta > 0 ? 'pos' : h.delta < 0 ? 'neg' : ''}">${sgnN(h.delta)}</div></div>`).join('') || '<p class="dim" style="padding:14px">No hands saved for this game.</p>'}</section>`;
-}
-function startSignedIn(){
-  const urlRoom = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
-  landing('join', urlRoom);
 }
 
 // Animations run one after another; one that fails (or finds the page changed) never blocks the rest.
@@ -1464,7 +1320,6 @@ function renderLobby(){
         <button class="btn btn-ghost btn-sm" id="lHelp">? Chips help</button>
         <button class="btn btn-ghost btn-sm" id="lRanks">Hand rankings</button>
         <button class="btn btn-ghost btn-sm" id="lInvite">Invite friends</button>
-        <button class="btn btn-ghost btn-sm" id="lHist">My history</button>
       </div>
     </div>
   </main>`;
@@ -1474,7 +1329,6 @@ function renderLobby(){
   $('#lTable').onclick = goTable;
   $('#lHelp').onclick = chipsHelpDialog;
   $('#lRanks').onclick = rankingsDialog;
-  $('#lHist').onclick = () => historyPage();
   $$('[data-menu]').forEach(b => b.onclick = () => popMenu(b, memberItems(S.members.find(m => m.id === b.dataset.menu))));
   $$('[data-dollar]').forEach(b => b.onclick = () => S.isAdmin ? chipsDialog('give', b.dataset.dollar) : chipsDialog('ask'));
   $$('[data-join]').forEach(row => {
@@ -1521,20 +1375,13 @@ function enterGame(){
 socket.on('connect', async () => {
   const params = new URLSearchParams(location.search);
   const urlRoom = (params.get('room') || '').toUpperCase();
-  const me = await emit('me');
-  ui.user = me.ok ? me.user : null;
-  if(!ui.user){
-    if(loadAuth()) setAuth('');           // the saved login has expired
-    saveSession(null); S = null;
-    return authPage('login', urlRoom ? 'Log in or create an account to join the game.' : '');
-  }
   if(session && (!urlRoom || urlRoom === session.code)){
     const r = await emit('resume', session);
     if(r.ok){ if(ui.view === 'waiting') return; if(!S || ui.view === 'landing' || ui.view === 'home') enterGame(); return; }
     saveSession(null);
     if(S){ S = null; toast('That game has closed. Join again with the code.', true); }
   }
-  if(!S && !['landing', 'history', 'auth'].includes(ui.view)) landing('join', urlRoom);
+  if(!S && ui.view !== 'landing') landing('join', urlRoom);
 });
 socket.on('connect_error', err => {
   if(err && err.message === 'private'){

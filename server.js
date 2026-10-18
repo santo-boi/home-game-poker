@@ -6,9 +6,6 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const { Table, validateSettings } = require('./table');
-const { createStore, hashPassword, checkPassword } = require('./store');
-const store = createStore();
-const mailer = require('./mailer');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -50,31 +47,6 @@ function keyOk(k){
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 io.use((socket, next) => keyOk(socket.handshake.auth && socket.handshake.auth.key) ? next() : next(new Error('private')));
-// Signed-in accounts: the browser sends its login token when it connects.
-io.use(async (socket, next) => {
-  try { socket.data.user = await store.userForSession(socket.handshake.auth && socket.handshake.auth.token); } catch(e){ console.error('session lookup failed', e.message); }
-  next();
-});
-
-// ---------- saving history ----------
-const saveTimers = new Map();
-function saveTotals(table, member){
-  if(!member.userId || member.isBot || !member.approved) return;
-  store.saveGame(table.summaryFor(member)).catch(e => console.error('saveGame', e.message));
-}
-// totals for everyone at a table, at most once every 2 seconds per table
-function scheduleSave(table){
-  if(saveTimers.has(table.code)) return;
-  saveTimers.set(table.code, setTimeout(() => {
-    saveTimers.delete(table.code);
-    for(const p of table.players.values()) saveTotals(table, p);
-  }, 2000));
-}
-function wireTable(table){
-  table.onHand = (t, records) => { for(const r of records) store.addHand(r).catch(e => console.error('addHand', e.message)); scheduleSave(t); };
-  table.onLeave = (t, p) => saveTotals(t, p);
-  return table;
-}
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I
 
 function newCode(){
@@ -119,19 +91,9 @@ function handle(socket, event, fn){
       ack({ ok: false, error: e.message || 'Something went wrong.' });
     }
     const t = rooms.get(socket.data.code);
-    if(t){ broadcast(t); scheduleSave(t); }
+    if(t) broadcast(t);
   });
 }
-// Same, for handlers that need to wait on the database.
-function handleAsync(socket, event, fn){
-  socket.on(event, async (payload, ack) => {
-    if(typeof ack !== 'function') ack = () => {};
-    try { ack({ ok: true, ...((await fn(payload || {})) || {}) }); }
-    catch(e){ ack({ ok: false, error: e.message || 'Something went wrong.', code: e.code }); }
-  });
-}
-const cleanEmail = e => String(e || '').trim().toLowerCase().slice(0, 120);
-const emailOk = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 // a different display name if someone with the same name is already in the game
 function uniqueName(table, name){
   const taken = new Set([...table.players.values()].map(p => p.name.toLowerCase()));
@@ -140,108 +102,6 @@ function uniqueName(table, name){
 }
 
 io.on('connection', socket => {
-  // ---------- accounts ----------
-  let attempts = 0, windowStart = Date.now();
-  const limit = () => {
-    if(Date.now() - windowStart > 60000){ attempts = 0; windowStart = Date.now(); }
-    if(++attempts > 10) throw new Error('Too many tries. Wait a minute and try again.');
-  };
-  const signedIn = () => { if(!socket.data.user) throw new Error('Log in first.'); return socket.data.user; };
-  handleAsync(socket, 'me', async () => ({ user: socket.data.user || null, storage: store.kind }));
-  // ----- email codes: 6 digits, stored hashed, 15 minutes, 5 tries -----
-  const hashCode = (email, code) => crypto.createHash('sha256').update(`${email}|${code}`).digest('hex');
-  async function sendCode(user, purpose){
-    const prev = await store.getCode(user.email, purpose);
-    if(prev && Date.now() - prev.sentAt < 30000) return;   // just sent one; don't spam their inbox
-    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-    await store.saveCode(user.email, purpose, hashCode(user.email, code), Date.now() + 15 * 60000);
-    const m = mailer.codeEmail(purpose, user.name, code);
-    await mailer.sendMail(user.email, m.subject, m.html, m.text);
-  }
-  async function checkCode(email, purpose, code){
-    const c = await store.getCode(email, purpose);
-    if(!c || c.expiresAt < Date.now()) throw new Error('That code has expired. Send a new one.');
-    if(c.attempts >= 5) throw new Error('Too many wrong codes. Send a new one.');
-    const a = Buffer.from(c.codeHash, 'hex'), b = Buffer.from(hashCode(email, String(code || '').trim()), 'hex');
-    if(!crypto.timingSafeEqual(a, b)){ await store.bumpCode(email, purpose); throw new Error('That code is not right. Check the email and try again.'); }
-    await store.deleteCode(email, purpose);
-  }
-  const unverified = () => Object.assign(new Error('Enter the code we emailed you to confirm your account.'), { code: 'unverified' });
-  async function signIn(user){
-    const pub = { id: user.id, email: user.email, name: user.name };
-    const token = await store.createSession(pub.id);
-    socket.data.user = pub;
-    return { user: pub, token };
-  }
-
-  handleAsync(socket, 'signup', async ({ email, name, password }) => {
-    limit();
-    email = cleanEmail(email); name = cleanName(name); password = String(password || '');
-    if(!emailOk(email)) throw new Error('Enter a valid email address.');
-    if(!name) throw new Error('Enter the name other players will see.');
-    if(password.length < 6) throw new Error('Use a password of at least 6 characters.');
-    const useMail = mailer.enabled();
-    const existing = await store.findUserByEmail(email);
-    if(existing && existing.verified) throw new Error('That email already has an account. Log in instead.');
-    if(existing){   // signed up before but never confirmed: start again
-      await store.updateUnverified(existing.id, name, hashPassword(password));
-      await sendCode({ email, name }, 'verify');
-      return { needVerify: true, email };
-    }
-    const user = await store.createUser(email, name, hashPassword(password), !useMail);
-    if(!user) throw new Error('That email already has an account. Log in instead.');
-    if(!useMail) return signIn(user);
-    await sendCode(user, 'verify');
-    return { needVerify: true, email };
-  });
-  handleAsync(socket, 'login', async ({ email, password }) => {
-    limit();
-    const u = await store.findUserByEmail(cleanEmail(email));
-    if(!u || !checkPassword(String(password || ''), u.pass)) throw new Error('Wrong email or password.');
-    if(u.verified === false && mailer.enabled()){ await sendCode(u, 'verify'); throw unverified(); }
-    return signIn(u);
-  });
-  handleAsync(socket, 'verifyEmail', async ({ email, code }) => {
-    limit();
-    email = cleanEmail(email);
-    const u = await store.findUserByEmail(email);
-    if(!u) throw new Error('No account uses that email.');
-    await checkCode(email, 'verify', code);
-    await store.setVerified(u.id);
-    return signIn(u);
-  });
-  handleAsync(socket, 'resendCode', async ({ email, purpose }) => {
-    limit();
-    email = cleanEmail(email);
-    const u = await store.findUserByEmail(email);
-    purpose = purpose === 'reset' ? 'reset' : 'verify';
-    if(u && (purpose === 'reset' || !u.verified)) await sendCode(u, purpose);
-    return { sent: true };
-  });
-  handleAsync(socket, 'forgotPassword', async ({ email }) => {
-    limit();
-    if(!mailer.enabled()) throw new Error('Password reset emails are not set up on this site. Ask the site owner to reset it.');
-    email = cleanEmail(email);
-    if(!emailOk(email)) throw new Error('Enter a valid email address.');
-    const u = await store.findUserByEmail(email);
-    if(u) await sendCode(u, 'reset');
-    return { sent: true };   // same answer either way, so nobody can test which emails have accounts
-  });
-  handleAsync(socket, 'resetPassword', async ({ email, code, password }) => {
-    limit();
-    email = cleanEmail(email); password = String(password || '');
-    if(password.length < 6) throw new Error('Use a password of at least 6 characters.');
-    const u = await store.findUserByEmail(email);
-    if(!u) throw new Error('That code is not right. Check the email and try again.');
-    await checkCode(email, 'reset', code);
-    await store.setPassword(u.id, hashPassword(password));   // also signs out every other device
-    return signIn(u);
-  });
-  handleAsync(socket, 'mailStatus', async () => ({ enabled: mailer.enabled() }));
-  handleAsync(socket, 'logout', async ({ token }) => { if(token) await store.deleteSession(String(token)); socket.data.user = null; });
-  handleAsync(socket, 'history', async () => ({ games: await store.history(signedIn().id) }));
-  handleAsync(socket, 'gameHands', async ({ gameKey }) => ({ hands: await store.gameHands(signedIn().id, String(gameKey || '')) }));
-
   const current = () => {
     const t = rooms.get(socket.data.code);
     const p = t && t.players.get(socket.data.playerId);
@@ -254,14 +114,14 @@ io.on('connection', socket => {
     return c;
   };
 
-  handle(socket, 'createRoom', ({ settings, startChips, bots }) => {
-    const user = signedIn();
-    const name = user.name;
+  handle(socket, 'createRoom', ({ name, settings, startChips, bots }) => {
+    name = cleanName(name);
+    if(!name) throw new Error('Enter your name.');
     const s = validateSettings(settings || {});
     const code = newCode();
-    const table = wireTable(new Table(code, s, broadcast));
+    const table = new Table(code, s, broadcast);
     rooms.set(code, table);
-    const p = table.addMember({ name, userId: user.id });
+    const p = table.addMember({ name });
     attach(socket, table, p);
     const chips = Math.floor(Number(startChips));
     if(chips > 0) table.give(p.id, chips);
@@ -271,14 +131,12 @@ io.on('connection', socket => {
     return { code, token: p.token };
   });
 
-  handle(socket, 'joinRoom', ({ code }) => {
-    const user = signedIn();
+  handle(socket, 'joinRoom', ({ code, name }) => {
+    name = cleanName(name);
+    if(!name) throw new Error('Enter your name.');
     const table = rooms.get(cleanCode(code));
     if(!table) throw new Error('No game has that code. Check it with the admin.');
-    // already in this game (another device, or came back): pick up the same seat
-    const mine = [...table.players.values()].find(p => p.userId === user.id);
-    if(mine){ attach(socket, table, mine); return { code: table.code, token: mine.token, pending: !mine.approved }; }
-    const p = table.addMember({ name: uniqueName(table, user.name), approved: false, userId: user.id });   // waits for the admin
+    const p = table.addMember({ name: uniqueName(table, name), approved: false });   // waits for the admin
     attach(socket, table, p);
     return { code: table.code, token: p.token, pending: true };
   });
@@ -294,7 +152,6 @@ io.on('connection', socket => {
     const table = rooms.get(cleanCode(code));
     const p = table && [...table.players.values()].find(x => x.token === token);
     if(!p) throw new Error('That seat is no longer available.');
-    if(p.userId && (!socket.data.user || socket.data.user.id !== p.userId)) throw new Error('Log in with the account that joined this game.');
     attach(socket, table, p);
     table.addLog(`${p.name} reconnected.`);
     return { code: table.code };
@@ -373,16 +230,10 @@ setInterval(() => {
   for(const [code, t] of rooms){
     const anyone = t.humans().some(p => p.connected);
     if(!anyone && Date.now() - t.lastActivity > 30 * 60 * 1000){
-      for(const p of t.players.values()) saveTotals(t, p);   // final totals before the game closes
       t.destroy(); rooms.delete(code); console.log(`room ${code} closed`);
     }
   }
 }, 60 * 1000).unref();
 
-store.init()
-  .then(() => {
-    console.log(`Accounts stored in ${store.kind === 'postgres' ? 'Postgres (DATABASE_URL)' : 'data.json — set DATABASE_URL to keep them permanently'}`);
-    server.listen(PORT, () => console.log(`Poker server on http://localhost:${PORT}${ACCESS_KEY ? ' (private: open it with ?key=YOUR_KEY)' : ''}`));
-  })
-  .catch(e => { console.error('Could not open the database:', e.message); process.exit(1); });
+server.listen(PORT, () => console.log(`Poker server on http://localhost:${PORT}${ACCESS_KEY ? ' (private: open it with ?key=YOUR_KEY)' : ''}`));
 module.exports = { server, rooms };
