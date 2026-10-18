@@ -1,0 +1,19 @@
+{
+  "name": "home-game-poker",
+  "version": "1.0.0",
+  "description": "Private No-Limit Hold'em rooms for you and your friends, with an exact equity engine.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node simulate.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.21.0",
+    "socket.io": "^4.8.0"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.0"
+  },
+  "license": "MIT"
+}
