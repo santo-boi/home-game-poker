@@ -15,6 +15,8 @@ Private No-Limit Hold'em tables for you and your friends. One person hosts a tab
 - **Chat with emojis:** messages and reactions pop up as speech bubbles above the player on the table.
 - **No sign-up:** open the link, type a name, play. Your name is remembered on each device.
 - **Odds panel:** your win, tie and lose chances, exact wherever that is fast and simulated with an error bar otherwise.
+- **Hide my cards:** the eye button next to your cards turns them face down on your own screen (press and hold them to peek, or press H). Handy when friends sit next to you.
+- **Hand history:** the History tab lists every hand you played in this game, with your two cards, the board and how much you won or lost, plus your running total.
 - **Ledger:** everyone's chips given, stack and net, so settling up is easy.
 - **Reconnects:** if someone's phone locks or their browser reloads, they return to the same seat.
 

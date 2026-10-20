@@ -30,7 +30,9 @@ let P = null;                 // previous state
 let receivedAt = 0;
 let session = loadSession();
 const ui = { tab: 'odds', panelOpen: false, autoFold: false, muted: false, raise: null, unread: 0, built: false,
-             dealing: false, boardShown: 0, handShown: null, animQ: Promise.resolve(), resultShown: null, eqKey: null, eq: null };
+             dealing: false, boardShown: 0, handShown: null, animQ: Promise.resolve(), resultShown: null, eqKey: null, eq: null,
+             hide: (() => { try { return localStorage.getItem('hideCards') === '1'; } catch(e){ return false; } })(), peek: false,
+             hist: null, histKey: null, histBusy: false };
 
 function loadSession(){ try { return JSON.parse(localStorage.getItem('homegame') || 'null'); } catch(e){ return null; } }
 function saveSession(s){ session = s; try { s ? localStorage.setItem('homegame', JSON.stringify(s)) : localStorage.removeItem('homegame'); } catch(e){} }
@@ -315,6 +317,8 @@ const ICON2 = {
   shield: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 5v6c0 5 3.4 9.6 8 11 4.6-1.4 8-6 8-11V5z"/></svg>',
   wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M16 13h2M3 10h18M6 6V4h11v2"/></svg>',
   users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5.5"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.6 3.4M6.6 6.6C3.8 8.3 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m3 3 18 18"/></svg>',
   chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
 };
 async function invite(){
@@ -506,6 +510,7 @@ function renderSeats(newHand){
       const color = AV_COLORS[i % AV_COLORS.length];
       el.innerHTML = `
         <div class="cards"></div>
+        <button type="button" class="eye-btn" aria-label="Hide my cards"></button>
         <div class="plate">
           <svg class="ring" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" stroke-dasharray="113.1" stroke-dashoffset="113.1"/></svg>
           <div class="avatar" style="background:${color}">${esc(initials(p.name))}</div>
@@ -514,10 +519,17 @@ function renderSeats(newHand){
         </div>
         <div class="hand-name"></div>`;
       el.querySelector('.cards').dataset.key = '';
+      el.querySelector('.eye-btn').onclick = e => { e.stopPropagation(); setHide(!ui.hide); };
+      wirePeek(el);
     }
     const acting = h && h.actingSeat === i;
     const winner = h && h.result && h.result.winners.some(w => w.seat === i);
-    setClass(el, 'seat' + (i === S.youSeat ? ' me' : '') + (acting ? ' acting' : '') + (p.folded ? ' folded' : '') +
+    const mine = i === S.youSeat, hasCards = mine && p.inHand && Array.isArray(p.cards) && typeof p.cards[0] === 'number';
+    // my cards stay face down while hidden, until a real showdown turns them over for everyone
+    const hideMine = hasCards && ui.hide && !(h && h.result && !h.result.uncontested && !p.folded);
+    if(mine){ const eb = el.querySelector('.eye-btn'); setHTML(eb, ui.hide ? ICON2.eyeOff : ICON2.eye);
+      const lbl = ui.hide ? 'Show my cards' : 'Hide my cards'; if(eb.getAttribute('aria-label') !== lbl){ eb.setAttribute('aria-label', lbl); eb.title = lbl + ' (H)'; } }
+    setClass(el, 'seat' + (mine ? ' me' : '') + (hasCards ? ' has-cards' : '') + (hideMine ? ' hide-mine' : '') + (hideMine && ui.peek ? ' peek' : '') + (acting ? ' acting' : '') + (p.folded ? ' folded' : '') +
       (p.sittingOut || (!p.inHand && h) || (p.chips === 0 && !p.inHand) ? ' out' : '') + (!p.connected && !p.isBot ? ' offline' : '') + (winner ? ' winner' : ''));
     setHTML(el.querySelector('.name'), esc(p.name) + (p.isAdmin ? `<span class="host-mark" title="Admin">${ICON2.shield}</span>` : '') + (p.isBot ? '<span class="host-mark botmark" title="Computer player">· bot</span>' : ''));
     setText(el.querySelector('.chips'), (p.chips === 0 && !p.inHand ? 'No chips' : p.standing ? `${fmtC(p.chips)} · leaving` : p.sittingOut ? `${fmtC(p.chips)} · away` : fmtC(p.chips))
@@ -829,6 +841,7 @@ function maybeAutoAct(){
   else if(pre === 'callany') act(o.toCall === 0 ? 'check' : 'call');
 }
 function hotkeys(e){
+  if(S && e.key && e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey && !/input|textarea|select/i.test(document.activeElement.tagName)){ setHide(!ui.hide); return; }
   if(!S || !S.options || /input|textarea|select/i.test(document.activeElement.tagName)) return;
   const k = e.key.toLowerCase();
   if(k === 'f' && $('#aFold') && !$('#aFold').disabled) $('#aFold').click();
@@ -865,7 +878,7 @@ requestAnimationFrame(tickTimers);
 /* ================= side panel ================= */
 function renderSide(){
   if(ui.view !== 'table' || !$('#sideTabs')) return;
-  const tabs = [['chat', 'Chat' + (ui.unread && ui.tab !== 'chat' ? ` · ${ui.unread}` : '')], ['log', 'Log'], ['odds', 'Odds']];
+  const tabs = [['chat', 'Chat' + (ui.unread && ui.tab !== 'chat' ? ` · ${ui.unread}` : '')], ['log', 'Log'], ['odds', 'Odds'], ['hist', 'History']];
   const tb = $('#sideTabs');
   const tkey = tabs.map(t => t[1]).join('|') + ui.tab;
   if(tb.dataset.key !== tkey){
@@ -876,6 +889,7 @@ function renderSide(){
   const body = $('#sideBody');
   if(ui.tab === 'odds') renderOdds(body);
   else if(ui.tab === 'log') renderLog(body);
+  else if(ui.tab === 'hist') renderHist(body);
   else renderChat(body);
 }
 
@@ -888,6 +902,13 @@ function renderOdds(body){
   // odds are only worked out while the panel is open, so they never slow the table down
   const shown = ui.panelOpen && ui.tab === 'odds';
   if(live && k >= 1 && !shown){ body.dataset.key = ''; return; }
+  if(live && ui.hide){
+    if(body.dataset.key === 'hidden') return; body.dataset.key = 'hidden';
+    body.innerHTML = `<div class="odds"><h3>Your odds</h3><p class="method">Your cards are hidden, so your odds are too.</p>
+      <button class="btn btn-sm" id="oddsShow" type="button">Show my cards</button></div>`;
+    $('#oddsShow').onclick = () => setHide(false);
+    return;
+  }
   if(body.dataset.key === key) return;
   body.dataset.key = key;
   if(!live || k < 1){
@@ -933,10 +954,68 @@ function equityAsync(cards, board, k, ekey){
     eqWorker.postMessage(eqJob);
   } catch(err){ eqWorker = 'off'; onMain(); }
 }
+/* ================= hide my cards ================= */
+// For playing with people sitting next to you: the eye turns your cards face down on your own screen;
+// press and hold them to peek.
+function setHide(v){
+  ui.hide = !!v; ui.peek = false;
+  try { localStorage.setItem('hideCards', ui.hide ? '1' : '0'); } catch(e){}
+  if(!S || ui.view !== 'table') return;
+  renderSeats(false);
+  if($('#sideBody')){ $('#sideBody').dataset.key = ''; renderSide(); }
+}
+function wirePeek(seatEl){
+  const box = seatEl.querySelector('.cards');
+  const end = () => { if(!ui.peek) return; ui.peek = false; seatEl.classList.remove('peek'); };
+  box.addEventListener('pointerdown', e => {
+    if(!seatEl.classList.contains('hide-mine')) return;
+    e.preventDefault(); ui.peek = true; seatEl.classList.add('peek');
+    try { box.setPointerCapture(e.pointerId); } catch(err){}
+  });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => box.addEventListener(ev, end));
+  box.addEventListener('contextmenu', e => { if(seatEl.classList.contains('me')) e.preventDefault(); });
+}
+
+/* ================= my hand history ================= */
+const STREET_NAME = { preflop: 'preflop', flop: 'on the flop', turn: 'on the turn', river: 'on the river' };
+function miniCard(c){ const r = RANKS[c >> 2]; return CARD(r === 'T' ? '10' : r, SUITS[c & 3]); }
+const miniRow = (cards, n) => cards.map(miniCard).join('') + '<span class="mc empty"></span>'.repeat(Math.max(0, n - cards.length));
+function renderHist(body){
+  const want = S.code + '|' + (S.histN || '0');
+  if(ui.histKey !== want && !ui.histBusy){
+    ui.histBusy = true;
+    emit('history').then(r => {
+      ui.histBusy = false;
+      if(r && r.ok){ ui.hist = r.hands; ui.histKey = want; }
+      if(ui.view === 'table' && ui.tab === 'hist' && $('#sideBody')){ $('#sideBody').dataset.key = ''; renderSide(); }
+    });
+  }
+  const hands = ui.hist || [];
+  const key = 'hist' + ui.histKey + (ui.bbMode ? 'bb' : '');
+  if(body.dataset.key === key) return; body.dataset.key = key;
+  if(!ui.hist){ body.innerHTML = '<div class="hist"><h3>Your hands</h3><p class="log-item">Loading…</p></div>'; return; }
+  const net = hands.reduce((a, x) => a + x.delta, 0), won = hands.filter(x => x.delta > 0).length;
+  const sign = d => d > 0 ? `+${fmtC(d)}` : d < 0 ? `−${fmtC(-d)}` : '±0';
+  body.innerHTML = `<div class="hist"><h3>Your hands</h3>
+    ${hands.length ? `<div class="hist-sum"><span>${hands.length} hand${hands.length > 1 ? 's' : ''} · won ${won}</span><b class="${net > 0 ? 'pos' : net < 0 ? 'neg' : ''}">${sign(net)}</b></div>` : ''}
+    ${hands.map(x => {
+      const name = !x.folded && x.board.length >= 3 ? PokerEngine.bestHandName([...x.hole, ...x.board]) : null;
+      const name2 = !x.folded && x.board2 ? PokerEngine.bestHandName([...x.hole, ...x.board2]) : null;
+      const what = x.folded ? `Folded ${STREET_NAME[x.foldStreet] || ''}` :
+        x.showdown ? (name ? name + (name2 && name2 !== name ? ` / ${name2}` : '') : 'Showdown') + (x.delta > 0 ? ' · won' : x.delta < 0 ? ' · lost' : ' · split')
+        : x.delta > 0 ? 'Everyone folded' : (name || '');
+      return `<div class="hh ${x.delta > 0 ? 'up' : x.delta < 0 ? 'down' : ''}">
+        <div class="hh-top"><span class="hh-n">#${x.n}${x.bomb ? ' · bomb' : ''}</span><span class="hh-what">${esc(what)}</span><b class="hh-d">${sign(x.delta)}</b></div>
+        <div class="hh-cards"><span class="hh-hole">${x.hole.map(miniCard).join('')}</span><span class="hh-board">${miniRow(x.board, 5)}</span></div>
+        ${x.board2 ? `<div class="hh-cards run2"><span class="hh-hole lbl">Run 2</span><span class="hh-board">${miniRow(x.board2, 5)}</span></div>` : ''}
+      </div>`;
+    }).join('') || '<p class="log-item">Your hands will show up here after each hand: your two cards, the board, and what you won or lost.</p>'}
+  </div>`;
+}
 function renderLog(body){
   const key = 'log' + (S.log[0] ? S.log[0].t + S.log.length : '');
   if(body.dataset.key === key) return; body.dataset.key = key;
-  body.innerHTML = S.log.map(l => `<div class="log-item ${l.kind}">${esc(l.text)}</div>`).join('') || '<p class="log-item">Nothing yet.</p>';
+  body.innerHTML = S.log.map(l => `<div class="log-item lk-${l.kind}">${esc(l.text)}</div>`).join('') || '<p class="log-item">Nothing yet.</p>';
 }
 const EMOJIS = ['😂','🤣','😭','😎','🤔','😮','😤','😡','🥲','😅','🙏','👍','👏','🔥','💀','🤡','🐟','🦈','🃏','♠️','💰','💸','🎉','🍀','🚀','🤯','😴','🙈','❤️','👀'];
 const QUICK = ['👍','😂','🔥','😭','😮','🙏'];

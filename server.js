@@ -164,6 +164,12 @@ io.on('connection', socket => {
   handle(socket, 'topUp', ({ amount }) => { const { t, p } = current(); t.topUp(p.id, amount); });
   handle(socket, 'cancelRequest', () => { const { t, p } = current(); t.cancelRequest(p.id); });
   handle(socket, 'sitOut', ({ value }) => { const { t, p } = current(); t.setSittingOut(p.id, value); });
+  // The player's own hand history for this game (asked for when the History tab is open).
+  socket.on('history', (_, ack) => {
+    if(typeof ack !== 'function') return;
+    const t = rooms.get(socket.data.code), p = t && t.players.get(socket.data.playerId);
+    ack({ ok: !!p, hands: p && p.history ? p.history : [] });
+  });
   handle(socket, 'chat', ({ text }) => {
     const { t, p } = current();
     if(!p.approved) throw new Error('The admin has not let you in yet.');

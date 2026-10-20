@@ -134,7 +134,7 @@ class Table {
     if(this.handLive() && p.inHand && !p.folded){
       p.standing = true;
       if(this.hand.actingSeat === p.seat) this.act(p.id, { type: 'fold' }, true);
-      else { p.folded = true; p.lastAction = 'Fold'; this.addLog(`${p.name} folded.`); this.afterFoldOutOfTurn(); }
+      else { p.folded = true; p.foldStreet = this.hand.street; p.lastAction = 'Fold'; this.addLog(`${p.name} folded.`); this.afterFoldOutOfTurn(); }
       return;
     }
     if(this.hand && p.inHand){ p.standing = true; return; }
@@ -410,7 +410,7 @@ class Table {
     const o = this.options(p);
     const type = action.type;
     if(type === 'fold'){
-      p.folded = true; p.lastAction = 'Fold';
+      p.folded = true; p.foldStreet = h.street; p.lastAction = 'Fold';
       this.addLog(`${p.name} folds.`);
     } else if(type === 'check'){
       if(!o.canCheck) throw new Error('You must call, raise or fold.');
@@ -569,6 +569,13 @@ class Table {
       const delta = p.chips - p.startStack;
       const won = delta > 0;
       if(won){ p.handsWon++; p.biggestPot = Math.max(p.biggestPot, pot); }
+      // the player's own hand history (kept for this game only, newest first)
+      if(!p.isBot){
+        if(!p.history) p.history = [];
+        p.history.unshift({ n: h.id, t: Date.now(), hole: p.hole.slice(), board: h.board.slice(), board2: h.board2 ? h.board2.slice() : null,
+          delta, pot, folded: p.folded, foldStreet: p.folded ? (p.foldStreet || 'preflop') : null, showdown: !h.result.uncontested && !p.folded, bomb: !!h.bomb });
+        if(p.history.length > 300) p.history.pop();
+      }
       if(p.isBot || !p.userId) continue;
       records.push({ userId: p.userId, gameKey: this.gameKey, handNo: h.id, hole: p.hole.map(ct).join(' '),
         board: h.board.map(ct).join(' '), board2: h.board2 ? h.board2.map(ct).join(' ') : null,
@@ -712,6 +719,7 @@ class Table {
       } : null,
       options: me && h ? this.options(me) : null,
       log: this.log.slice(0, 50), chat: this.chat.slice(-40),
+      histN: me && me.history ? me.history.length + ':' + me.history[0].n : '0',
       serverTime: Date.now()
     };
   }

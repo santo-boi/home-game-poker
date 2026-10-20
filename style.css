@@ -247,9 +247,9 @@ button, .btn, [role=tab], .seat, .empty-chair{ touch-action: manipulation; -webk
 .best-hand b{ color: var(--brass); font-weight: 600; }
 .pot-odds{ margin-top: 10px; font-size: 13px; color: var(--text-dim); }
 .log-item{ font-size: 13px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.05); color: var(--text-dim); }
-.log-item.win{ color: var(--brass); }
-.log-item.hand{ color: var(--text); font-weight: 600; padding-top: 12px; }
-.log-item.board{ color: var(--ivory); }
+.log-item.lk-win{ color: var(--brass); }
+.log-item.lk-hand{ color: var(--text); font-weight: 600; padding-top: 12px; }
+.log-item.lk-board{ color: var(--ivory); }
 .chat-list{ display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .chat-msg{ font-size: 14px; }
 .chat-msg b{ font-weight: 600; margin-right: 6px; }
@@ -677,3 +677,44 @@ html, body{ height: 100%; }
 @keyframes bubbleInBelow{ from{ opacity: 0; transform: translate(-50%, 0) translateY(-8px) scale(.6); } to{ opacity: 1; transform: translate(-50%, 0); } }
 @media (prefers-reduced-motion: reduce){ .chat-bubble, .react-pop{ animation: none; } }
 @media (max-width: 760px){ .chat-bubble{ font-size: 13px; max-width: 56vw; } .chat-bubble.emo{ font-size: 26px; } }
+
+/* ---------- log text never spills out of the panel ---------- */
+.side-body{ overflow-x: hidden; }
+.log-item, .chat-msg, .hh-what{ overflow-wrap: anywhere; min-width: 0; }
+
+/* ---------- hide my cards (eye) ---------- */
+.seat .eye-btn{ display: none; position: absolute; top: -4px; right: -26px; z-index: 4; width: 30px; height: 30px; padding: 6px; border-radius: 50%;
+  border: 1px solid var(--line); background: rgba(10,19,33,.85); color: var(--ivory); cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.4);
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: background .15s, border-color .15s; }
+.seat .eye-btn svg{ width: 100%; height: 100%; display: block; }
+.seat .eye-btn:hover{ background: rgba(30,45,70,.95); }
+.seat.me.has-cards .eye-btn{ display: block; }
+.seat.me.hide-mine .eye-btn{ border-color: var(--brass); color: var(--brass); }
+.seat.me .cards{ -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.seat.me.hide-mine .cards{ cursor: pointer; touch-action: none; }
+.seat.me.hide-mine:not(.peek) .cards .card.up .inner{ transform: none; }
+.seat.me.hide-mine:not(.peek) .hand-name{ visibility: hidden; }
+.seat.me.hide-mine:not(.peek) .cards::after{ content: 'hold to peek'; position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 3;
+  font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ivory); background: rgba(0,0,0,.62); padding: 3px 9px; border-radius: 999px; white-space: nowrap; pointer-events: none; }
+@media (max-width: 760px){ .seat .eye-btn{ width: 28px; height: 28px; right: -30px; top: -2px; } .seat.me.hide-mine:not(.peek) .cards::after{ font-size: 10px; padding: 2px 7px; } }
+
+/* ---------- my hand history ---------- */
+.side .tabs button{ min-width: 0; }
+.hist-sum{ display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: var(--text-dim); padding: 4px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.hist-sum b{ font-size: 18px; font-variant-numeric: tabular-nums; }
+.hist .pos, .hh.up .hh-d{ color: var(--good); }
+.hist .neg, .hh.down .hh-d{ color: var(--danger); }
+.hh{ padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.hh-top{ display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin-bottom: 7px; }
+.hh-n{ color: var(--text-dim); font-variant-numeric: tabular-nums; flex: none; }
+.hh-what{ flex: 1; color: var(--text); }
+.hh-d{ flex: none; font-size: 15px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.hh-cards{ display: flex; gap: 10px; align-items: center; }
+.hh-cards + .hh-cards{ margin-top: 5px; }
+.hh-hole, .hh-board{ display: flex; gap: 3px; }
+.hh-hole{ padding-right: 10px; border-right: 1px solid var(--line); }
+.hh-hole.lbl{ width: 63px; justify-content: flex-end; font-size: 11px; color: var(--text-dim); align-items: center; }
+.hh.down .hh-hole .mc, .hh .hh-hole .mc{ box-shadow: 0 0 0 1.5px var(--brass), 0 2px 4px rgba(0,0,0,.3); }
+.hh .mc.empty{ background: transparent; border: 1px dashed rgba(245,240,227,.15); box-shadow: none; }
+.hh-cards .mc{ width: 28px; height: 38px; font-size: 12px; }
+@media (max-width: 760px){ .hh-cards .mc{ width: 26px; height: 35px; font-size: 11px; } .hh-cards{ gap: 8px; } .hh-hole{ padding-right: 8px; } .hh-hole.lbl{ width: 57px; } }
